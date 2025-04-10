@@ -5,5 +5,4 @@ PyPDF2
 requests
 beautifulsoup4
 pillow
-youtube-transcript-api
 aiohttp
