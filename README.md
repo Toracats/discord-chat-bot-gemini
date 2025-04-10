@@ -1,6 +1,6 @@
 # Discord Chat Bot (Gemini API)
 
-これは、Google Gemini API と discord.py を使用して構築された多機能DiscordチャットBotです。
+これは、Google Gemini API (Google Gen AI SDK)と discord.py を使用して構築された多機能DiscordチャットBotです。
 <br>Discordのスラッシュコマンドを使用することで、Botの再起動なしにカスタマイズ可能です。
 <br>改変・再配布などはご自由にどうぞ。(MITライセンス)
 <br>バグがあればできる限り改善するので、Twitterの@New_Tora_Cats宛てにDMしてください。
