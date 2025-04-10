@@ -142,4 +142,4 @@ Botの機能は主にスラッシュコマンド (`/`) を使用して操作し�
 
 # Lisence
 
-This project is licensed under the MIT License, see the LICENSE file for details
+This project is licensed under the MIT License, see the LICENSE file for details.
