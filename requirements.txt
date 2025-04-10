@@ -6,3 +6,4 @@ requests
 beautifulsoup4
 pillow
 aiohttp
+youtube_transcript_api
