@@ -139,6 +139,7 @@ Botの機能は主にスラッシュコマンド (`/`) を使用して操作し�
 <br>OpenWeatherMapの無料プランなどにはAPI呼び出し回数制限があります。自動更新の間隔（デフォルト毎分）は、必要に応じて `cogs/weather_mood_cog.py` 内の `@tasks.loop` デコレータの引数を変更してください (例: `minutes=30`)。
 *   **PyNaCl** 
 <br>ログに `PyNaCl is not installed` という警告が出る場合がありますが、これはDiscordのボイスチャット機能を使用しない限り、Botのコア機能には影響ありません。気になる場合は `pip install pynacl` でインストールしてください。
+<br>現在音声認識には対応していません。後に対応予定です（詳細未定）
 
 # Lisence
 
