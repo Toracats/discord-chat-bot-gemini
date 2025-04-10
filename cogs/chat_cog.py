@@ -9,6 +9,7 @@ from google import genai
 from google.genai import types as genai_types
 from google.genai import errors as genai_errors
 import asyncio # 再試行の遅延用
+from typing import Optional
 
 # 他のCogやUtilsから必要なものをインポート
 from utils import config_manager
