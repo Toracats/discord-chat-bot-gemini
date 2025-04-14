@@ -1,3 +1,5 @@
+# main.py (CogリストをBot属性として保持)
+
 import discord
 from discord.ext import commands
 import os
@@ -13,6 +15,9 @@ logger = logging.getLogger(__name__)
 # 環境変数をロード
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+if not DISCORD_BOT_TOKEN:
+    logger.critical("DISCORD_BOT_TOKEN not found in environment variables.")
+    exit() # トークンがない場合は終了
 
 # Botの初期化
 intents = discord.Intents.default()
@@ -20,7 +25,7 @@ intents.message_content = True
 intents.members = True # ニックネーム取得等に必要になる可能性
 bot = commands.Bot(command_prefix="!", intents=intents) # Prefixは現状不要だが念のため
 
-# Cogのリスト
+# Cogのリスト ★ main.py で一元管理 ★
 INITIAL_EXTENSIONS = [
     'cogs.config_cog',
     'cogs.chat_cog',
@@ -30,6 +35,8 @@ INITIAL_EXTENSIONS = [
     'cogs.test_cog',
     'cogs.weather_mood_cog',
 ]
+# ★ CogリストをBotオブジェクトの属性として設定 ★
+bot.initial_extensions = INITIAL_EXTENSIONS
 
 @bot.event
 async def on_ready():
@@ -45,8 +52,8 @@ async def on_ready():
          # await bot.close()
          # return
 
-    # Cog のロード
-    for extension in INITIAL_EXTENSIONS:
+    # Cog のロード ★ Bot属性からリストを取得 ★
+    for extension in bot.initial_extensions:
         try:
             await bot.load_extension(extension)
             logger.info(f'Successfully loaded extension {extension}')
@@ -68,4 +75,9 @@ async def main():
         await bot.start(DISCORD_BOT_TOKEN)
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by KeyboardInterrupt.")
+    except Exception as e:
+        logger.critical("Unhandled exception during bot execution", exc_info=e)

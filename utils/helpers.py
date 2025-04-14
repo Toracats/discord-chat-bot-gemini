@@ -1,10 +1,10 @@
-﻿# utils/helpers.py (エラーハンドリング強化)
+﻿# utils/helpers.py (プレフィックス除去強化、エラーハンドリング強化)
 
 import re
 import discord # split_and_send_messages で必要
 import logging # logging をインポート
 import urllib.parse as urlparse # is_youtube_url, get_video_id で必要
-from typing import Optional
+from typing import Optional, List # remove_all_prefixes で List を使用
 import asyncio # split_and_send_messages で必要
 
 logger = logging.getLogger(__name__) # ロガーを取得
@@ -23,6 +23,23 @@ def remove_citation_marks(text: str) -> str:
     if not text: return "" # None や空文字の場合空文字を返す
     citation_pattern = re.compile(r'\[\d+\]')
     return citation_pattern.sub('', text).strip()
+
+def remove_all_prefixes(text: str) -> str:
+    """応答テキストから全ての [名前]: 形式のプレフィックスを除去する"""
+    if not text: return ""
+    # 行頭の [任意の文字列]: を繰り返し除去する正規表現
+    # ^: 行頭, \s*: 先頭の空白(任意), \[.*?\]: 角括弧で囲まれた任意の文字列(最短一致), :\s*: コロンと後続の空白(任意)
+    prefix_pattern = re.compile(r'^\s*\[.*?]:\s*')
+    cleaned_text = text
+    # プレフィックスがなくなるまで繰り返し除去
+    while True:
+        new_text = prefix_pattern.sub('', cleaned_text, count=1) # count=1 で行頭の最初のものだけ置換
+        # 変更がなければループ終了
+        if new_text == cleaned_text:
+            break
+        cleaned_text = new_text.lstrip() # 除去後の先頭空白を削除
+    return cleaned_text
+
 
 async def split_and_send_messages(message_system: discord.Message, text: str, max_length: int):
     """メッセージを分割して送信 (エラーハンドリング強化)"""
@@ -85,7 +102,11 @@ async def split_and_send_messages(message_system: discord.Message, text: str, ma
                 # ephemeralでない通常のメッセージへの応答と仮定
                 # もしインタラクション応答なら interaction.followup.send を使う
                 if message_system.interaction is None:
-                     await message_system.reply(chunk, mention_author=False)
+                     # DMチャンネルかサーバーチャンネルかで分岐
+                     if isinstance(message_system.channel, discord.DMChannel):
+                         await message_system.channel.send(chunk) # DMではreplyできないことがあるためsend
+                     else:
+                         await message_system.reply(chunk, mention_author=False)
                 else:
                      # スラッシュコマンド等のインタラクションへの応答の場合
                      await message_system.channel.send(chunk) # replyの代わりにsendを使う
@@ -134,6 +155,8 @@ def extract_url(string: str) -> Optional[str]:
              # Markdownリンク内のURLの可能性があるため、再度検索
              second_match = re.search(url_regex, string[match.end():])
              return second_match.group(0) if second_match else None
+        # URLの末尾が意図しない文字で終わっていないか少しチェック (例: 。、！)
+        # url = url.rstrip('。、！)?,.;') # やりすぎると正規のURLを壊す可能性もあるので注意
         return url
     return None
 
