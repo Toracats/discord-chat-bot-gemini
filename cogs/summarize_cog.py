@@ -68,20 +68,27 @@ class SummarizeCog(commands.Cog):
 入力情報:
 {input_context}
 
+重要:
+- 履歴エントリ内のユーザーIDは、応答生成時には以下のように呼び名に置き換えてください:
+  - 元の発言者ID ({speaker_id}) -> 「{config_manager.get_nickname(speaker_id) or f'User {speaker_id}'}」さん
+  - 元の会話相手ID ({history_entry.get('current_interlocutor_id')}) -> 「{config_manager.get_nickname(history_entry.get('current_interlocutor_id')) or f'User {history_entry.get("current_interlocutor_id")}'}」さん
+  - （もし会話内容に他のユーザーIDが含まれていれば、同様に呼び名で言及してください）
+
 出力JSON形式:
 {{
   "speaker_id": <元の発言者ID (整数)>,
   "original_timestamp": "<元の発言タイムスタンプ (ISO 8601形式文字列)>",
   "channel_id": <元のチャンネルID (整数) または null>,
-  "summary_text": "<発言内容の要約 (簡潔に)>"
+  "summary_text": "<発言内容の要約 (簡潔に、**ユーザーIDではなく上記で指定された呼び名を使用**)>"
 }}
 
 重要:
-- `summary_text` は、元の発言内容の要点を、誰が誰に何を言ったかが分かるように簡潔に記述してください。元の発言内容をそのままコピーしないでください。
+- `summary_text` は、元の発言内容の要点を、**指定された呼び名を使って**誰が誰に何を言ったかが分かるように簡潔に記述してください。ユーザーIDを直接含めないでください。
 - 出力は上記のJSON形式のみとし、他のテキストは含めないでください。
 
 出力JSON:
 """
+            logger.debug(f"Summary prompt for entry {entry_id}:\n{prompt}")
             logger.debug(f"Summary prompt for entry {entry_id}:\n{prompt}")
 
             # --- ★★★ Gemini API 呼び出し (chat_cog に合わせる) ★★★ ---
