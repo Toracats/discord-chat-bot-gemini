@@ -240,21 +240,44 @@ class ChatCog(commands.Cog):
                 else: logger.warning("Response has no candidates.")
 
                 if finish_reason == genai_types.FinishReason.RECITATION:
-                    is_recitation_error = True; await asyncio.sleep(1)
                     logger.warning(f"Recitation error detected for user {user_id}. Retrying...")
+                    is_recitation_error = True
+                    await asyncio.sleep(1)
+
+                    # ★ 修正: リトライ時のシステムプロンプトとConfigを正しく生成 ★
                     system_instruction_retry = create_system_prompt(filtered_summaries, add_recitation_warning=True) # ★ 要約情報も渡す
+
+                    # ★★★ リトライ用の GenerationConfig を生成 ★★★
                     final_generation_config_retry = genai_types.GenerateContentConfig(
-                         # ... (他の設定は同じ) ...
-                         system_instruction=system_instruction_retry )
+                         temperature=generation_config_dict.get('temperature', 0.9),
+                         top_p=generation_config_dict.get('top_p', 1.0),
+                         top_k=generation_config_dict.get('top_k', 1),
+                         candidate_count=generation_config_dict.get('candidate_count', 1),
+                         max_output_tokens=generation_config_dict.get('max_output_tokens', 1024),
+                         safety_settings=safety_settings_for_api, # 安全設定は同じ
+                         tools=tools_for_api,                  # ツールも同じ
+                         system_instruction=system_instruction_retry # ★ 再試行用システムプロンプト
+                     )
+                    # ★★★ ここまでが省略されていた部分 ★★★
+
                     logger.debug("Sending retry request to Gemini due to Recitation error...")
                     # 【GenAI呼び出し箇所 2/2 (リトライ)】
-                    response = self.genai_client.models.generate_content( model=model_name, contents=contents_for_api, config=final_generation_config_retry )
+                    response = self.genai_client.models.generate_content(
+                        model=model_name,
+                        contents=contents_for_api, # 入力内容は同じ
+                        config=final_generation_config_retry # ★ 再試行用Configを使用
+                    )
                     logger.debug(f"Retry response finish_reason: {response.candidates[0].finish_reason if response.candidates else 'N/A'}")
+                    # 再試行後のレスポンスを処理
                     if response and response.candidates:
-                         candidate = response.candidates[0]; finish_reason = candidate.finish_reason
-                         if candidate.content and candidate.content.parts: response_candidates_parts = candidate.content.parts
-                         else: response_candidates_parts = []
-                    else: response_candidates_parts = []
+                         candidate = response.candidates[0]
+                         finish_reason = candidate.finish_reason
+                         if candidate.content and candidate.content.parts:
+                              response_candidates_parts = candidate.content.parts
+                         else:
+                              response_candidates_parts = []
+                    else:
+                         response_candidates_parts = []
 
                 raw_response_text = "".join(part.text for part in response_candidates_parts if hasattr(part, 'text') and part.text)
                 response_text = raw_response_text.strip()
