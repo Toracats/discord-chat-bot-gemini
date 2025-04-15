@@ -1,4 +1,4 @@
-# main.py (CogリストをBot属性として保持)
+# main.py (SummarizeCog を追加)
 
 import discord
 from discord.ext import commands
@@ -17,15 +17,15 @@ load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 if not DISCORD_BOT_TOKEN:
     logger.critical("DISCORD_BOT_TOKEN not found in environment variables.")
-    exit() # トークンがない場合は終了
+    exit()
 
 # Botの初期化
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True # ニックネーム取得等に必要になる可能性
-bot = commands.Bot(command_prefix="!", intents=intents) # Prefixは現状不要だが念のため
+intents.members = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Cogのリスト ★ main.py で一元管理 ★
+# Cogのリスト
 INITIAL_EXTENSIONS = [
     'cogs.config_cog',
     'cogs.chat_cog',
@@ -34,8 +34,8 @@ INITIAL_EXTENSIONS = [
     'cogs.processing_cog',
     'cogs.test_cog',
     'cogs.weather_mood_cog',
+    'cogs.summarize_cog', # ★ 追加
 ]
-# ★ CogリストをBotオブジェクトの属性として設定 ★
 bot.initial_extensions = INITIAL_EXTENSIONS
 
 @bot.event
@@ -43,16 +43,14 @@ async def on_ready():
     logger.info(f'Logged in as {bot.user.name} (ID: {bot.user.id})')
     logger.info('------')
 
-    # ★ Cogロード前に設定をロード
     try:
         config_manager.load_all_configs()
     except Exception as e:
          logger.critical("Failed to load initial configurations!", exc_info=e)
-         # 必要であれば Bot を停止するなどの処理
-         # await bot.close()
+         # await bot.close() # 必要なら
          # return
 
-    # Cog のロード ★ Bot属性からリストを取得 ★
+    # Cog のロード
     for extension in bot.initial_extensions:
         try:
             await bot.load_extension(extension)
@@ -67,10 +65,12 @@ async def on_ready():
     except Exception as e:
         logger.error("Failed to sync commands", exc_info=e)
 
-    # Botの状態をPlayingに設定（任意）
     await bot.change_presence(activity=discord.Game(name="with Generative AI"))
 
 async def main():
+    # ★ Botインスタンスをループで参照可能にする（SummarizeCog取得用）
+    loop = asyncio.get_running_loop()
+    loop._bot_instance = bot
     async with bot:
         await bot.start(DISCORD_BOT_TOKEN)
 
