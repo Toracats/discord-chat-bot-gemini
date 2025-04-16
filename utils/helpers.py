@@ -1,10 +1,10 @@
-﻿# utils/helpers.py (プレフィックス除去強化、エラーハンドリング強化)
+﻿# utils/helpers.py (remove_all_prefixes をテキスト全体対象に修正)
 
 import re
 import discord # split_and_send_messages で必要
 import logging # logging をインポート
 import urllib.parse as urlparse # is_youtube_url, get_video_id で必要
-from typing import Optional, List # remove_all_prefixes で List を使用
+from typing import Optional, List
 import asyncio # split_and_send_messages で必要
 
 logger = logging.getLogger(__name__) # ロガーを取得
@@ -27,18 +27,17 @@ def remove_citation_marks(text: str) -> str:
 def remove_all_prefixes(text: str) -> str:
     """応答テキストから全ての [名前]: 形式のプレフィックスを除去する"""
     if not text: return ""
-    # 行頭の [任意の文字列]: を繰り返し除去する正規表現
-    # ^: 行頭, \s*: 先頭の空白(任意), \[.*?\]: 角括弧で囲まれた任意の文字列(最短一致), :\s*: コロンと後続の空白(任意)
-    prefix_pattern = re.compile(r'^\s*\[.*?]:\s*')
-    cleaned_text = text
-    # プレフィックスがなくなるまで繰り返し除去
-    while True:
-        new_text = prefix_pattern.sub('', cleaned_text, count=1) # count=1 で行頭の最初のものだけ置換
-        # 変更がなければループ終了
-        if new_text == cleaned_text:
-            break
-        cleaned_text = new_text.lstrip() # 除去後の先頭空白を削除
-    return cleaned_text
+    # ★★★ 正規表現を修正: 行頭指定(^)を削除し、テキスト全体から検索 ★★★
+    # \s*     : 任意個の空白 (プレフィックス前の空白も除去対象に)
+    # \[.*?\] : 角括弧で囲まれた最短一致の任意文字列 (名前部分)
+    # :       : コロン
+    # \s*     : 任意個の空白 (プレフィックス後の空白も除去対象に)
+    prefix_pattern = re.compile(r'\s*\[.*?]:\s*')
+    # ★★★ テキスト全体から該当パターンを空文字に置換 ★★★
+    # re.sub は一致する全ての箇所を置換するので、while ループは不要
+    cleaned_text = prefix_pattern.sub('', text)
+    # 念のため、処理後の前後の空白を除去
+    return cleaned_text.strip()
 
 
 async def split_and_send_messages(message_system: discord.Message, text: str, max_length: int):
@@ -74,7 +73,6 @@ async def split_and_send_messages(message_system: discord.Message, text: str, ma
                      split_pos = text.rfind(' ', search_start, end)
 
                 # 適切な区切りが見つからない、または区切りが前すぎる場合はmax_lengthで強制分割
-                # (split_pos == -1 or split_pos < start) の条件を追加して、startより前にならないように
                 if split_pos == -1 or split_pos < start :
                     split_pos = end -1 # max_lengthギリギリで区切る
 
@@ -82,12 +80,10 @@ async def split_and_send_messages(message_system: discord.Message, text: str, ma
             else: # 残りが max_length 以下の場合
                  end = len(text)
 
-
             sub_message = text[start:end]
             if sub_message.strip(): # 空白のみのチャンクは追加しない
                  messages_to_send.append(sub_message)
             start = end
-
 
     first_message = True
     for i, chunk in enumerate(messages_to_send):
@@ -98,91 +94,54 @@ async def split_and_send_messages(message_system: discord.Message, text: str, ma
 
             logger.debug(f"Sending chunk {i+1}/{len(messages_to_send)} (length: {len(chunk)}) for message {message_system.id}")
             if first_message:
-                # replyは一度しか使えないので、2回目以降はsend
-                # ephemeralでない通常のメッセージへの応答と仮定
-                # もしインタラクション応答なら interaction.followup.send を使う
                 if message_system.interaction is None:
-                     # DMチャンネルかサーバーチャンネルかで分岐
-                     if isinstance(message_system.channel, discord.DMChannel):
-                         await message_system.channel.send(chunk) # DMではreplyできないことがあるためsend
-                     else:
-                         await message_system.reply(chunk, mention_author=False)
-                else:
-                     # スラッシュコマンド等のインタラクションへの応答の場合
-                     await message_system.channel.send(chunk) # replyの代わりにsendを使う
-
+                     if isinstance(message_system.channel, discord.DMChannel): await message_system.channel.send(chunk)
+                     else: await message_system.reply(chunk, mention_author=False)
+                else: await message_system.channel.send(chunk)
                 first_message = False
             else:
                 await message_system.channel.send(chunk)
-            # Discord APIのレート制限を考慮して少し待機（任意だが推奨）
-            await asyncio.sleep(0.6) # 少し長めに
+            await asyncio.sleep(0.6) # 少し待機
 
         except discord.HTTPException as e:
-            logger.error(f"HTTPException sending chunk {i+1}/{len(messages_to_send)} (length: {len(chunk)}): {e.status} {e.code} {e.text}", exc_info=False)
-            try:
-                 # エラーが発生したことを元のメッセージチャンネルに通知（失敗する可能性もある）
-                 await message_system.channel.send(f"(メッセージの一部送信に失敗しました: Discord APIエラー {e.code})")
-            except Exception:
-                 logger.error(f"Failed to send error notification about chunk failure.")
-            break # エラーが発生したら以降のチャンク送信を中止
+            logger.error(f"HTTPException sending chunk {i+1}/{len(messages_to_send)}: {e.status} {e.code} {e.text}", exc_info=False)
+            try: await message_system.channel.send(f"(メッセージの一部送信に失敗: Discord APIエラー {e.code})")
+            except Exception: logger.error(f"Failed send error notification.")
+            break
         except Exception as e:
             logger.error(f"Unexpected error sending chunk {i+1}/{len(messages_to_send)}", exc_info=True)
-            try:
-                 await message_system.channel.send(f"(メッセージの一部送信中に予期せぬエラーが発生しました)")
-            except Exception:
-                 logger.error(f"Failed to send unexpected error notification about chunk failure.")
+            try: await message_system.channel.send(f"(メッセージの一部送信中に予期せぬエラー)")
+            except Exception: logger.error(f"Failed send unexpected error notification.")
             break
 
 
 def extract_url(string: str) -> Optional[str]:
     """文字列からURLを抽出"""
-    # より多くの TLD を考慮し、括弧などでの終端を避けるように改良（完璧ではない）
     url_regex = re.compile(
-        r'https?://' # http:// or https://
-        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|' # domain...
-        r'localhost|' # localhost...
-        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})' # ...or ip
-        r'(?::\d+)?' # optional port
-        r'(?:/?|[/?]\S+)', re.IGNORECASE)
+        r'https?://' r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|' r'localhost|' r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})' r'(?::\d+)?' r'(?:/?|[/?]\S+)', re.IGNORECASE)
     match = re.search(url_regex, string)
-    # Markdownリンク形式でないことを確認 (例: [text](url))
     if match:
         url = match.group(0)
-        # URLの前後にMarkdownリンクの括弧がないかチェック
         preceding_char = string[match.start()-1:match.start()] if match.start() > 0 else ""
         following_char = string[match.end():match.end()+1] if match.end() < len(string) else ""
         if preceding_char == '(' and following_char == ')':
-             # Markdownリンク内のURLの可能性があるため、再度検索
              second_match = re.search(url_regex, string[match.end():])
              return second_match.group(0) if second_match else None
-        # URLの末尾が意図しない文字で終わっていないか少しチェック (例: 。、！)
-        # url = url.rstrip('。、！)?,.;') # やりすぎると正規のURLを壊す可能性もあるので注意
         return url
     return None
 
 
 def is_youtube_url(url: Optional[str]) -> bool:
     """URLがYouTube URLか判定"""
-    if url is None:
-        return False
-    youtube_regex = re.compile(
-        r'(?:https?://)?(?:www\.)?'
-        r'(?:youtube\.com/(?:watch\?v=|embed/|v/|shorts/)|youtu\.be/)'
-        r'([a-zA-Z0-9_-]{11})'
-    )
+    if url is None: return False
+    youtube_regex = re.compile( r'(?:https?://)?(?:www\.)?(?:youtube\.com/(?:watch\?v=|embed/|v/|shorts/)|youtu\.be/)([a-zA-Z0-9_-]{11})' )
     return bool(youtube_regex.match(url))
 
 def get_video_id(url: Optional[str]) -> Optional[str]:
     """YouTube URLから動画IDを抽出"""
-    if url is None:
-        return None
-    patterns = [
-        r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
-        r'(?:embed\/|shorts\/)([0-9A-Za-z_-]{11})',
-        r'youtu\.be\/([0-9A-Za-z_-]{11})'
-    ]
+    if url is None: return None
+    patterns = [ r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', r'(?:embed\/|shorts\/)([0-9A-Za-z_-]{11})', r'youtu\.be\/([0-9A-Za-z_-]{11})' ]
     for pattern in patterns:
         match = re.search(pattern, url)
-        if match:
-            return match.group(1)
+        if match: return match.group(1)
     return None
