@@ -196,18 +196,31 @@ class HistoryCog(commands.Cog):
             view = None # view を初期化
 
             if clear_type == "all":
-                # (変更なし - 全会話履歴の削除)
                 required_password = os.getenv("DELETE_HISTORY_PASSWORD")
-                if not required_password: await interaction.followup.send("❌ 全会話履歴削除用パスワード未設定。", ephemeral=True); return
-                if password is None: await interaction.followup.send("⚠️ **全会話履歴削除**には`password`引数要。", ephemeral=True); return
+                if not required_password: await interaction.followup.send("❌ 全履歴削除用パスワード未設定。", ephemeral=True); return
+                if password is None: await interaction.followup.send("⚠️ **全履歴削除**には`password`引数要。", ephemeral=True); return
                 if password != required_password: await interaction.followup.send("❌ パスワード不一致。", ephemeral=True); return
-                view = ConfirmClearView(timeout=30.0); msg_content = "⚠️ **本当にすべての会話履歴を削除しますか？元に戻せません！**";
+
+                # ★ 確認メッセージを修正 ★
+                view = ConfirmClearView(timeout=30.0); msg_content = "⚠️ **本当にすべての会話履歴 *および* 要約履歴を削除しますか？元に戻せません！**";
                 await interaction.followup.send(msg_content, view=view, ephemeral=True); await view.wait();
                 if view.confirmed:
+                    # ★ 会話履歴の削除 ★
                     await config_manager.clear_all_history_async()
-                    edit_kwargs["content"] = "✅ すべての会話履歴を削除しました。"
                     logger.warning(f"All conversation history cleared by {interaction.user}")
-                elif view.confirmed is False: edit_kwargs["content"] = "キャンセルしました。"
+
+                    # ★★★ 要約履歴の削除処理を追加 ★★★
+                    cleared_summary_ok = await config_manager.clear_summaries()
+                    if cleared_summary_ok:
+                        logger.warning(f"All summary history cleared by {interaction.user}")
+                        edit_kwargs["content"] = "✅ すべての会話履歴と要約履歴を削除しました。" # ★ 成功メッセージ修正
+                    else:
+                        logger.error("Failed to clear summary history during 'clear all' command.")
+                        edit_kwargs["content"] = "✅ 会話履歴は削除しましたが、要約履歴の削除中にエラーが発生しました。" # ★ 一部失敗メッセージ
+
+                elif view.confirmed is False:
+                    edit_kwargs["content"] = "キャンセルしました。"
+                # タイムアウト時のメッセージは view.wait() の後で設定 (変更なし
 
             elif clear_type == "user":
                  # (変更なし - 特定ユーザー関連の会話履歴削除)
@@ -257,28 +270,26 @@ class HistoryCog(commands.Cog):
                 elif view.confirmed is False:
                     edit_kwargs["content"] = "キャンセルしました。"
 
-            # --- 最終的な応答を編集 ---
+             # --- 最終的な応答を編集 ---
+            # (変更なし)
             if interaction.response.is_done():
                  try:
-                     if view and view.confirmed is None: # タイムアウト
-                         edit_kwargs["content"] = "タイムアウトしました。"
+                     if view and view.confirmed is None: edit_kwargs["content"] = "タイムアウトしました。"
                      await interaction.edit_original_response(**edit_kwargs)
-                 except discord.NotFound: logger.warning("Original interaction response not found when editing final clear status.")
-                 except discord.HTTPException as e: logger.error("Failed to edit final clear status message.", exc_info=e)
-            else: # is_done() が False (稀だが念のため)
-                 logger.warning("Interaction was not done after ConfirmClearView wait, sending new message.")
-                 if view and view.confirmed is None: edit_kwargs["content"] = "タイムアウトしました。"
-                 # interaction.response.send_message は defer 後は使えないので followup を使う
+                 except discord.NotFound: logger.warning("Original interaction response not found for clear status.")
+                 except discord.HTTPException as e: logger.error("Failed edit final clear status message.", exc_info=e)
+            else:
+                 logger.warning("Interaction not done after ConfirmClearView wait, sending followup.");
+                 if view and view.confirmed is None: edit_kwargs["content"] = "タイムアウトしました." # 句点追加
                  await interaction.followup.send(edit_kwargs["content"], ephemeral=True)
 
         except Exception as e:
+            # (エラーハンドリング部分は変更なし)
             logger.error(f"Error in /history clear (type={clear_type})", exc_info=e)
             error_msg = f"履歴の削除中にエラーが発生しました: {e}"
-            try:
-                 # エラー時も followup を使うのが確実
-                 await interaction.followup.send(error_msg, ephemeral=True)
+            try: await interaction.followup.send(error_msg, ephemeral=True)
             except discord.NotFound: logger.warning("Original interaction response not found on error.")
-            except discord.HTTPException: logger.error("Failed to send error message for history clear.")
+            except discord.HTTPException: logger.error("Failed send error message history clear.")
 
 
     @history_commands.command(name="set_length", description="保持する直近の会話履歴の最大件数を設定します")
