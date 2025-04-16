@@ -402,27 +402,81 @@ async def clear_all_history_async():
     async with data_lock: conversation_history.setdefault(GLOBAL_HISTORY_KEY, deque(maxlen=get_max_history())).clear(); await save_conversation_history_nolock(); logger.warning("Cleared all global conversation history.")
 
 async def clear_user_history_async(target_user_id: int) -> int:
-    """指定ユーザー関連の会話履歴をクリア"""
+    """グローバル履歴から指定ユーザーが関与したエントリを削除する"""
     global conversation_history; cleared_count = 0; target_user_id_str = str(target_user_id);
     async with data_lock:
-        if GLOBAL_HISTORY_KEY not in conversation_history: return 0; current_deque = conversation_history[GLOBAL_HISTORY_KEY]; max_len = current_deque.maxlen; new_deque = deque(maxlen=max_len); original_len = len(current_deque)
-        for entry in list(current_deque):
-            if entry.get("interlocutor_id") != target_user_id and entry.get("current_interlocutor_id") != target_user_id: new_deque.append(entry)
-            else: logger.debug(f"Removing entry involving user {target_user_id}: {entry.get('entry_id')}")
+        if GLOBAL_HISTORY_KEY not in conversation_history:
+            logger.debug(f"Global history key '{GLOBAL_HISTORY_KEY}' not found. Nothing to clear for user {target_user_id_str}.")
+            return 0 # ★ current_deque を参照する前に return
+
+        # ★ GLOBAL_HISTORY_KEY が存在する場合のみ current_deque を取得 ★
+        current_deque = conversation_history[GLOBAL_HISTORY_KEY]
+        # ★ dequeが存在しない、またはmaxlenがない場合のエラーハンドリングを追加（より安全に）
+        if not isinstance(current_deque, deque):
+            logger.error(f"conversation_history['{GLOBAL_HISTORY_KEY}'] is not a deque. Cannot clear user history.")
+            return 0
+        max_len = current_deque.maxlen
+        new_deque = deque(maxlen=max_len)
+        original_len = len(current_deque)
+        logger.info(f"Clearing global history entries involving user {target_user_id_str}. Original length: {original_len}")
+
+        # deque が空の場合の処理を追加
+        if original_len == 0:
+            logger.debug("Global history deque is empty. Nothing to clear.")
+            return 0
+
+        for entry in list(current_deque): # イテレーション用にリスト化
+            if entry.get("interlocutor_id") != target_user_id and entry.get("current_interlocutor_id") != target_user_id:
+                new_deque.append(entry)
+            else:
+                logger.debug(f"Removing entry involving user {target_user_id}: {entry.get('entry_id')}")
+
         cleared_count = original_len - len(new_deque)
-        if cleared_count > 0: conversation_history[GLOBAL_HISTORY_KEY] = new_deque; await save_conversation_history_nolock(); logger.info(f"Cleared {cleared_count} entries for user {target_user_id}.")
+        if cleared_count > 0:
+            conversation_history[GLOBAL_HISTORY_KEY] = new_deque
+            await save_conversation_history_nolock()
+            logger.info(f"Cleared {cleared_count} entries for user {target_user_id}.")
+        else:
+             logger.debug(f"No entries involving user {target_user_id_str} found to clear.")
     return cleared_count
 
 async def clear_channel_history_async(channel_id: int) -> int:
-    """指定チャンネルの会話履歴をクリア"""
-    global conversation_history; cleared_count = 0; 
+    """グローバル履歴から指定チャンネルのエントリを削除する"""
+    global conversation_history; cleared_count = 0;
     async with data_lock:
-        if GLOBAL_HISTORY_KEY not in conversation_history: return 0; current_deque = conversation_history[GLOBAL_HISTORY_KEY]; max_len = current_deque.maxlen; new_deque = deque(maxlen=max_len); original_len = len(current_deque)
-        for entry in list(current_deque):
-            if entry.get("channel_id") != channel_id: new_deque.append(entry)
-            else: logger.debug(f"Removing entry for channel {channel_id}: {entry.get('entry_id')}")
+        if GLOBAL_HISTORY_KEY not in conversation_history:
+            logger.debug(f"Global history key '{GLOBAL_HISTORY_KEY}' not found. Nothing to clear for channel {channel_id}.")
+            return 0 # ★ current_deque を参照する前に return
+
+        # ★ GLOBAL_HISTORY_KEY が存在する場合のみ current_deque を取得 ★
+        current_deque = conversation_history[GLOBAL_HISTORY_KEY]
+        # ★ dequeが存在しない、またはmaxlenがない場合のエラーハンドリングを追加
+        if not isinstance(current_deque, deque):
+            logger.error(f"conversation_history['{GLOBAL_HISTORY_KEY}'] is not a deque. Cannot clear channel history.")
+            return 0
+        max_len = current_deque.maxlen
+        new_deque = deque(maxlen=max_len)
+        original_len = len(current_deque)
+        logger.info(f"Clearing global history entries for channel {channel_id}. Original length: {original_len}")
+
+        # deque が空の場合の処理を追加
+        if original_len == 0:
+            logger.debug("Global history deque is empty. Nothing to clear.")
+            return 0
+
+        for entry in list(current_deque): # イテレーション用にリスト化
+            if entry.get("channel_id") != channel_id:
+                new_deque.append(entry)
+            else:
+                logger.debug(f"Removing entry for channel {channel_id}: {entry.get('entry_id')}")
+
         cleared_count = original_len - len(new_deque)
-        if cleared_count > 0: conversation_history[GLOBAL_HISTORY_KEY] = new_deque; await save_conversation_history_nolock(); logger.info(f"Cleared {cleared_count} entries for channel {channel_id}.")
+        if cleared_count > 0:
+            conversation_history[GLOBAL_HISTORY_KEY] = new_deque
+            await save_conversation_history_nolock()
+            logger.info(f"Cleared {cleared_count} entries for channel {channel_id}.")
+        else:
+             logger.debug(f"No entries for channel {channel_id} found to clear.")
     return cleared_count
 
 # --- 要約DB操作関数 ---
