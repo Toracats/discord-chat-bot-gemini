@@ -188,14 +188,35 @@ class ChatCog(commands.Cog):
                 if not response_text:
                     logger.warning("Response text empty after extraction.")
                     block_reason_str = "不明"; finish_reason_str = "不明"; safety_reason = "不明な理由"
+                    safety_ratings_info = "詳細不明" # ★ Safety Ratings 情報用変数を初期化
+
                     try:
-                        if response and hasattr(response, 'prompt_feedback') and response.prompt_feedback: block_reason_str = str(response.prompt_feedback.block_reason or "ブロック理由なし")
-                        if finish_reason: finish_reason_str = str(finish_reason)
-                        if finish_reason == genai_types.FinishReason.SAFETY and response and response.candidates and response.candidates[0].safety_ratings: safety_categories = [str(r.category) for r in response.candidates[0].safety_ratings if r.probability != genai_types.HarmProbability.NEGLIGIBLE]; safety_reason = f"安全性フィルター ({', '.join(safety_categories)})" if safety_categories else "安全性フィルター"
+                        if response and hasattr(response, 'prompt_feedback') and response.prompt_feedback:
+                            block_reason_str = str(response.prompt_feedback.block_reason or "ブロック理由なし")
+                        if finish_reason:
+                            finish_reason_str = str(finish_reason)
+
+                        # ★★★ Safetyブロック時の詳細情報を取得 ★★★
+                        if finish_reason == genai_types.FinishReason.SAFETY and response and response.candidates and response.candidates[0].safety_ratings:
+                            ratings = response.candidates[0].safety_ratings
+                            triggered_ratings = [f"{r.category.name}: {r.probability.name}" for r in ratings if r.probability != genai_types.HarmProbability.NEGLIGIBLE]
+                            if triggered_ratings:
+                                safety_reason = f"安全性フィルター ({', '.join([r.category.name for r in ratings if r.probability != genai_types.HarmProbability.NEGLIGIBLE])})"
+                                safety_ratings_info = ", ".join(triggered_ratings) # 詳細情報を格納
+                                logger.warning(f"Safety block details: {safety_ratings_info}") # ★ 詳細をログ出力
+                            else:
+                                safety_reason = "安全性フィルター (詳細不明)"
+                                logger.warning("Safety block detected, but no specific category rating found above NEGLIGIBLE.")
+                        # ★★★ ここまで ★★★
+
                     except Exception as e_fb: logger.warning(f"Error accessing response feedback: {e_fb}")
+
+                    # --- 応答メッセージ生成部分を修正 ---
                     if is_recitation_error and finish_reason == genai_types.FinishReason.RECITATION: response_text = f"({call_name}さん、応答が引用超過のため停止しました。再試行しましたが、再度停止しました。)"
                     elif finish_reason == genai_types.FinishReason.RECITATION: response_text = f"({call_name}さん、応答が引用超過のため停止しました。)"
-                    elif finish_reason == genai_types.FinishReason.SAFETY: response_text = f"({call_name}さん、応答が{safety_reason}によりブロックされました)"
+                    # ★ Safetyブロック時のメッセージに詳細を追加 ★
+                    elif finish_reason == genai_types.FinishReason.SAFETY:
+                        response_text = f"({call_name}さん、応答が{safety_reason}によりブロックされました。\n詳細: {safety_ratings_info})"
                     elif block_reason_str != "不明" and block_reason_str != "ブロック理由なし": response_text = f"({call_name}さん、プロンプトが原因で応答がブロックされました。理由: {block_reason_str})"
                     elif finish_reason == genai_types.FinishReason.MAX_TOKENS: response_text = f"({call_name}さん、応答が長くなりすぎたため途中で停止しました。)"
                     else: response_text = f"({call_name}さん、応答を生成できませんでした。終了理由: {finish_reason_str}, ブロック理由: {block_reason_str})"
