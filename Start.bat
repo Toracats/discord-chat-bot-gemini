@@ -7,9 +7,9 @@ set BAT_DIR=%~dp0
 call "%BAT_DIR%..\venv\Scripts\activate.bat"
 
 :: GeminiDiscordBot.py が存在するディレクトリへ移動
-cd /d "%BAT_DIR%"
+cd /d "%BAT_DIR%\gui"
 
 :: Pythonスクリプトを実行
-python main.py
+python main_gui.py
 
 pause

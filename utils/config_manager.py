@@ -1,4 +1,4 @@
-# utils/config_manager.py (get_all_user_identifiers 追加、省略なし)
+# utils/config_manager.py (appdirs, Fernet, 単一ファイル化 対応 - user_data_lock追加, エラー修正 - 完全版)
 
 import json
 import os
@@ -6,138 +6,209 @@ from pathlib import Path
 import logging
 from collections import deque
 import datetime
-# from datetime import timezone
-from typing import Dict, List, Any, Optional, Deque
+from typing import Dict, List, Any, Optional, Deque, Union
 import asyncio
-import uuid # 要約ID用
+import uuid
+from appdirs import user_config_dir, user_data_dir
+from cryptography.fernet import Fernet, InvalidToken
+import threading
 
 logger = logging.getLogger(__name__)
 
-CONFIG_DIR = Path("config")
-PROMPTS_DIR = Path("prompts")
-HISTORY_FILE = CONFIG_DIR / "conversation_history.json"
-BOT_CONFIG_FILE = CONFIG_DIR / "bot_config.json"
-USER_DATA_FILE = CONFIG_DIR / "user_data.json"
-CHANNEL_SETTINGS_FILE = CONFIG_DIR / "channel_settings.json"
-GEMINI_CONFIG_FILE = CONFIG_DIR / "gemini_config.json"
-GENERATION_CONFIG_FILE = CONFIG_DIR / "generation_config.json"
-WEATHER_CONFIG_FILE = CONFIG_DIR / "weather_config.json"
-SUMMARY_CONFIG_FILE = CONFIG_DIR / "summary_config.json"
-SUMMARIZED_HISTORY_FILE = CONFIG_DIR / "summarized_history.jsonl"
+# --- アプリケーション情報 ---
+APP_NAME = "Discord_Chat_Bot" # ★ 要変更
+APP_AUTHOR = "Toracats" # ★ 要変更
 
-# --- デフォルト設定 ---
-DEFAULT_MAX_HISTORY = 10
-DEFAULT_MAX_RESPONSE_LENGTH = 1800
-DEFAULT_RANDOM_DM_PROMPT = "最近どうですか？何か面白いことありましたか？"
-DEFAULT_PERSONA_PROMPT = "あなたは親切なAIアシスタントです。"
-DEFAULT_GENERATION_CONFIG = {
-    "temperature": 0.9, "top_p": 1.0, "top_k": 1,
-    "candidate_count": 1, "max_output_tokens": 1024,
-}
-DEFAULT_SAFETY_SETTINGS = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_LOW_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_LOW_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_LOW_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_LOW_AND_ABOVE"},
-]
-DEFAULT_GEMINI_CONFIG = {
-    "model_name": "gemini-2.0-flash",
-    "safety_settings": DEFAULT_SAFETY_SETTINGS
-}
-DEFAULT_RANDOM_DM_CONFIG = {
-    "enabled": False, "min_interval": 3600 * 6, "max_interval": 86400 * 2,
-    "stop_start_hour": 23, "stop_end_hour": 7,
-    "last_interaction": None, "next_send_time": None,
-}
-DEFAULT_SUMMARY_MODEL = "gemini-1.5-flash"
-DEFAULT_SUMMARY_MAX_TOKENS = 4000
-DEFAULT_SUMMARY_GENERATION_CONFIG = {
-    "temperature": 0.5, "top_p": 1.0, "top_k": 1,
-    "candidate_count": 1, "max_output_tokens": 512,
-}
-DEFAULT_SUMMARY_CONFIG = {
-    "summary_model_name": DEFAULT_SUMMARY_MODEL,
-    "summary_max_prompt_tokens": DEFAULT_SUMMARY_MAX_TOKENS,
-    "summary_generation_config": DEFAULT_SUMMARY_GENERATION_CONFIG,
-}
+# --- パス設定 ---
+CONFIG_BASE_DIR = Path(user_config_dir(APP_NAME, APP_AUTHOR))
+PRIMARY_CONFIG_FILE = CONFIG_BASE_DIR / "app_config.json"
+LOG_BASE_DIR = Path(user_data_dir(APP_NAME, APP_AUTHOR)) / "logs"
+LOG_FILE = LOG_BASE_DIR / "bot.log"
+LOCAL_PROMPTS_DIR = Path("prompts") # ★ 追加: ローカルのプロンプトディレクトリ
+USER_DATA_DIR = Path(user_data_dir(APP_NAME, APP_AUTHOR)) # ★ 追加: ユーザーデータディレクトリ
+
+# --- ユーザーデータディレクトリ内のファイル名 ---
+HISTORY_FILENAME = "conversation_history.json" # ★ 追加
+SUMMARIZED_HISTORY_FILENAME = "summarized_history.jsonl"
+SUMMARIZED_HISTORY_FILE = USER_DATA_DIR / SUMMARIZED_HISTORY_FILENAME # ★ USER_DATA_DIRを使用
+
+# --- 暗号化設定 ---
+# 初回生成方法:
+# 1. Pythonインタプリタを開く (python または python3)
+# 2. from cryptography.fernet import Fernet
+# 3. print(Fernet.generate_key().decode())
+# 4. 表示されたキー文字列を下の ENCRYPTION_KEY の '' 内に貼り付ける
+ENCRYPTION_KEY = b'TYptY24SJ9ZWuiN_4XRgGRSKXE0Wg9oUH4_HWuRamHI=' # 要変更
+if ENCRYPTION_KEY == b'YOUR_GENERATED_FERNET_KEY_HERE': raise ValueError("Fernet key not configured.")
+try: fernet = Fernet(ENCRYPTION_KEY)
+except ValueError as e: logger.critical(f"Invalid Fernet key: {e}"); raise
+SECRET_KEYS = ["discord_token", "gemini_api_key", "weather_api_key", "delete_history_password"]
+
+# --- デフォルト設定値 ---
+DEFAULT_MAX_HISTORY = 10; DEFAULT_MAX_RESPONSE_LENGTH = 1800
+DEFAULT_PERSONA_PROMPT = "あなたは親切なAIアシスタントです。"; DEFAULT_RANDOM_DM_PROMPT = "最近どうですか？何か面白いことありましたか？"
+DEFAULT_GENERATION_CONFIG = {"temperature": 0.9, "top_p": 1.0, "top_k": 1, "candidate_count": 1, "max_output_tokens": 1024}
+DEFAULT_SAFETY_SETTINGS = [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_LOW_AND_ABOVE"}, {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_LOW_AND_ABOVE"}, {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_LOW_AND_ABOVE"}, {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_LOW_AND_ABOVE"}]
+DEFAULT_GEMINI_CONFIG = {"model_name": "gemini-1.5-flash", "safety_settings": DEFAULT_SAFETY_SETTINGS}
+DEFAULT_RANDOM_DM_CONFIG = {"enabled": False, "min_interval": 21600, "max_interval": 172800, "stop_start_hour": 23, "stop_end_hour": 7, "last_interaction": None, "next_send_time": None}
+DEFAULT_SUMMARY_MODEL = "gemini-1.5-flash"; DEFAULT_SUMMARY_MAX_TOKENS = 4000
+DEFAULT_SUMMARY_GENERATION_CONFIG = {"temperature": 0.5, "top_p": 1.0, "top_k": 1, "candidate_count": 1, "max_output_tokens": 512}
 GLOBAL_HISTORY_KEY = "global_history"
 
+# --- 新しいデフォルト設定構造 ---
+DEFAULT_APP_CONFIG = {
+    "secrets": {"discord_token": None, "gemini_api_key": None, "weather_api_key": None, "delete_history_password": None},
+    "bot_settings": {"max_history": DEFAULT_MAX_HISTORY, "max_response_length": DEFAULT_MAX_RESPONSE_LENGTH},
+    "user_data": {}, "channel_settings": {}, "gemini_config": DEFAULT_GEMINI_CONFIG.copy(),
+    "generation_config": DEFAULT_GENERATION_CONFIG.copy(),
+    "summary_config": {"summary_model_name": DEFAULT_SUMMARY_MODEL, "summary_max_prompt_tokens": DEFAULT_SUMMARY_MAX_TOKENS, "summary_generation_config": DEFAULT_SUMMARY_GENERATION_CONFIG.copy()},
+    "weather_config": {"last_location": None},
+}
+
 # --- データ保持用変数 ---
-bot_settings: Dict[str, Any] = {}
-user_data: Dict[str, Dict[str, Any]] = {}
-channel_settings: Dict[str, List[int]] = {}
-gemini_config: Dict[str, Any] = {}
-generation_config: Dict[str, Any] = {}
-summary_config: Dict[str, Any] = {}
-conversation_history: Dict[str, Deque[Dict[str, Any]]] = {GLOBAL_HISTORY_KEY: deque(maxlen=DEFAULT_MAX_HISTORY)}
+app_config: Dict[str, Any] = {}
+conversation_history: Dict[str, Deque[Dict[str, Any]]] = {}
 persona_prompt: str = ""
 random_dm_prompt: str = ""
-weather_config: Dict[str, Any] = {}
-data_lock = asyncio.Lock()
+file_access_lock = asyncio.Lock()
+user_data_lock = threading.Lock()
+
+# --- 暗号化/復号ヘルパー ---
+def encrypt_string(plain_text: Optional[str]) -> str:
+    if not plain_text: return ""
+    try: return fernet.encrypt(plain_text.encode('utf-8')).decode('utf-8')
+    except Exception as e: logger.error("Encryption failed", exc_info=e); return ""
+
+def decrypt_string(encrypted_text: Optional[str]) -> str:
+    if not encrypted_text: return ""
+    try: return fernet.decrypt(encrypted_text.encode('utf-8')).decode('utf-8')
+    except InvalidToken: logger.warning(f"Decryption failed: Invalid token."); return ""
+    except Exception as e: logger.error("Decryption failed", exc_info=e); return ""
 
 # --- ロード関数 ---
-def _load_json(filepath: Path, default: Any = {}) -> Any:
-    """JSONファイルを安全に読み込む"""
+def _load_primary_config() -> Dict[str, Any]:
+    config = DEFAULT_APP_CONFIG.copy()
     try:
-        if filepath.exists() and filepath.is_file():
-            with open(filepath, 'r', encoding='utf-8') as f:
-                try: data = json.load(f); logger.info(f"Loaded JSON: {filepath}"); return data
-                except json.JSONDecodeError: logger.error(f"Decode error: {filepath}. Using default."); _save_json(filepath, default); return default.copy()
-        else: logger.warning(f"Not found: {filepath}. Creating default."); _save_json(filepath, default); return default.copy()
-    except Exception as e: logger.error(f"Load error: {filepath}", exc_info=e); return default.copy()
+        if PRIMARY_CONFIG_FILE.exists() and PRIMARY_CONFIG_FILE.is_file():
+            with open(PRIMARY_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                loaded_data = json.load(f)
+                def _recursive_update(d, u):
+                    for k, v in u.items(): d[k] = _recursive_update(d.get(k, {}), v) if isinstance(v, dict) else v
+                    return d
+                config = _recursive_update(config, loaded_data)
+                logger.info(f"Loaded primary config: {PRIMARY_CONFIG_FILE}")
+                if "secrets" in config and isinstance(config["secrets"], dict):
+                    secrets_section = config["secrets"]
+                    for key in SECRET_KEYS: secrets_section[key] = decrypt_string(secrets_section.get(key))
+                else: logger.warning("'secrets' section missing/invalid."); config["secrets"] = DEFAULT_APP_CONFIG["secrets"].copy()
+        else: logger.warning(f"Primary config not found: {PRIMARY_CONFIG_FILE}. Creating default."); _save_primary_config(config)
+    except json.JSONDecodeError: logger.error(f"Decode error: {PRIMARY_CONFIG_FILE}. Using defaults."); config = DEFAULT_APP_CONFIG.copy()
+    except Exception as e: logger.error(f"Load primary config error: {PRIMARY_CONFIG_FILE}", exc_info=e); config = DEFAULT_APP_CONFIG.copy()
 
-def _load_text(filepath: Path, default: str = "") -> str:
-    """テキストファイルを安全に読み込む"""
+    if "user_data" in config and isinstance(config["user_data"], dict):
+        for uid, u_data in config["user_data"].items():
+            if "random_dm" in u_data and isinstance(u_data["random_dm"], dict):
+                rdm_conf = u_data["random_dm"]; default_rdm = DEFAULT_RANDOM_DM_CONFIG.copy(); default_rdm.update(rdm_conf); u_data["random_dm"] = default_rdm
+                for key in ["last_interaction", "next_send_time"]:
+                    iso_str = default_rdm.get(key)
+                    if iso_str and isinstance(iso_str, str):
+                        try: dt_obj = datetime.datetime.fromisoformat(iso_str); default_rdm[key] = dt_obj.astimezone() if dt_obj.tzinfo is None else dt_obj
+                        except ValueError: logger.warning(f"Parse dt failed {key} user {uid}: {iso_str}"); default_rdm[key] = None
+                    elif isinstance(iso_str, datetime.datetime): default_rdm[key] = iso_str.astimezone()
+                    else: default_rdm[key] = None
+    return config
+
+def _load_text(filename: str, default: str = "") -> str:
+    user_filepath = CONFIG_BASE_DIR / "prompts" / filename; content = None
     try:
-        if filepath.exists() and filepath.is_file():
-            with open(filepath, 'r', encoding='utf-8') as f: content = f.read(); logger.info(f"Loaded text: {filepath}"); return content
-        else: logger.warning(f"Not found: {filepath}. Creating default."); _save_text(filepath, default); return default
-    except Exception as e: logger.error(f"Load error: {filepath}", exc_info=e); return default
+        if user_filepath.exists() and user_filepath.is_file():
+            with open(user_filepath, 'r', encoding='utf-8') as f: content = f.read(); logger.info(f"Loaded text user: {user_filepath}")
+            return content
+    except Exception as e: logger.error(f"Load text user error: {user_filepath}", exc_info=e)
+    local_filepath = LOCAL_PROMPTS_DIR / filename # ★ LOCAL_PROMPTS_DIR を使用
+    try:
+        if local_filepath.exists() and local_filepath.is_file():
+            with open(local_filepath, 'r', encoding='utf-8') as f: content = f.read(); logger.info(f"Loaded text local: {local_filepath}")
+            return content
+        else: logger.warning(f"Prompt '{filename}' not found. Using default.");
+        try: 
+            user_filepath.parent.mkdir(parents=True, exist_ok=True);
+            with open(user_filepath, 'w', encoding='utf-8') as f: f.write(default); logger.info(f"Saved default prompt user: {user_filepath}")
+        except Exception as save_e: logger.error(f"Save default prompt error: {user_filepath}", exc_info=save_e)
+        return default
+    except Exception as e: logger.error(f"Load text local error: {local_filepath}", exc_info=e); return default
+
+def _load_json(filename: str, default: Any = {}) -> Any:
+    data_filepath = Path(user_data_dir(APP_NAME, APP_AUTHOR)) / filename
+    try:
+        if data_filepath.exists() and data_filepath.is_file():
+            with open(data_filepath, 'r', encoding='utf-8') as f:
+                try: data = json.load(f); logger.info(f"Loaded JSON: {data_filepath}"); return data
+                except json.JSONDecodeError: logger.error(f"Decode error: {data_filepath}. Creating default."); _save_json(filename, default); return default.copy()
+        else: logger.warning(f"Not found: {data_filepath}. Creating default."); _save_json(filename, default); return default.copy()
+    except Exception as e: logger.error(f"Load JSON error: {data_filepath}", exc_info=e); return default.copy()
 
 def load_all_configs():
-    """すべての設定とデータをロードする"""
-    global bot_settings, user_data, channel_settings, gemini_config, generation_config, conversation_history, persona_prompt, random_dm_prompt, weather_config, summary_config
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True); PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
-    bot_settings = _load_json(BOT_CONFIG_FILE, {"max_history": DEFAULT_MAX_HISTORY, "max_response_length": DEFAULT_MAX_RESPONSE_LENGTH})
-    loaded_user_data = _load_json(USER_DATA_FILE); temp_user_data = {}
-    for uid, u_data in loaded_user_data.items():
-        new_u_data = {"nickname": u_data.get("nickname")}; rdm_conf_loaded = u_data.get("random_dm", {}); rdm_conf_merged = DEFAULT_RANDOM_DM_CONFIG.copy()
-        if isinstance(rdm_conf_loaded, dict): rdm_conf_merged.update(rdm_conf_loaded)
-        for key in ["last_interaction", "next_send_time"]:
-             loaded_val = rdm_conf_merged.get(key)
-             if loaded_val and isinstance(loaded_val, str):
-                 try: dt_obj = datetime.datetime.fromisoformat(loaded_val); rdm_conf_merged[key] = dt_obj.astimezone()
-                 except (ValueError, TypeError): logger.warning(f"Parse error dt str {key} user {uid}: {loaded_val}"); rdm_conf_merged[key] = None
-             elif isinstance(rdm_conf_merged[key], datetime.datetime): dt_obj = rdm_conf_merged[key]; rdm_conf_merged[key] = dt_obj.astimezone()
-             else: rdm_conf_merged[key] = None
-        new_u_data["random_dm"] = rdm_conf_merged; temp_user_data[uid] = new_u_data
-    user_data = temp_user_data
-    channel_settings = _load_json(CHANNEL_SETTINGS_FILE); gemini_config = _load_json(GEMINI_CONFIG_FILE, DEFAULT_GEMINI_CONFIG.copy()); generation_config = _load_json(GENERATION_CONFIG_FILE, DEFAULT_GENERATION_CONFIG.copy()); summary_config = _load_json(SUMMARY_CONFIG_FILE, DEFAULT_SUMMARY_CONFIG.copy())
-    loaded_history_data = _load_json(HISTORY_FILE); max_hist = bot_settings.get('max_history', DEFAULT_MAX_HISTORY); global_hist_list = loaded_history_data.get(GLOBAL_HISTORY_KEY, [])
-    dq: Deque[Dict[str, Any]] = deque(maxlen=max_hist)
+    global app_config, conversation_history, persona_prompt, random_dm_prompt
+    CONFIG_BASE_DIR.mkdir(parents=True, exist_ok=True); LOG_BASE_DIR.mkdir(parents=True, exist_ok=True)
+    Path(user_data_dir(APP_NAME, APP_AUTHOR)).mkdir(parents=True, exist_ok=True); (CONFIG_BASE_DIR / "prompts").mkdir(parents=True, exist_ok=True)
+    app_config = _load_primary_config()
+    loaded_history_data = _load_json(HISTORY_FILENAME); max_hist = app_config.get("bot_settings", {}).get('max_history', DEFAULT_MAX_HISTORY) # ★ HISTORY_FILENAME を使用
+    global_hist_list = loaded_history_data.get(GLOBAL_HISTORY_KEY, []); dq: Deque[Dict[str, Any]] = deque(maxlen=max_hist)
     if isinstance(global_hist_list, list):
         for entry in global_hist_list:
             if isinstance(entry, dict):
                 try:
-                    if "timestamp" in entry and isinstance(entry["timestamp"], str): entry["timestamp"] = datetime.datetime.fromisoformat(entry["timestamp"]).astimezone()
+                    if "timestamp" in entry and isinstance(entry["timestamp"], str):
+                        try: dt_obj = datetime.datetime.fromisoformat(entry["timestamp"]); entry["timestamp"] = dt_obj.astimezone() if dt_obj.tzinfo is None else dt_obj
+                        except ValueError: logger.warning(f"Parse ts history failed: {entry.get('timestamp')}"); entry["timestamp"] = None
                     elif isinstance(entry.get("timestamp"), datetime.datetime): entry["timestamp"] = entry["timestamp"].astimezone()
                     else: entry["timestamp"] = None
-                    entry.setdefault("role", None); entry.setdefault("parts", []); entry.setdefault("channel_id", None); entry.setdefault("interlocutor_id", None); entry.setdefault("current_interlocutor_id", None)
+                    entry.setdefault("role", None); entry.setdefault("parts", []); entry.setdefault("channel_id", None); entry.setdefault("interlocutor_id", None); entry.setdefault("current_interlocutor_id", None); entry.setdefault("entry_id", str(uuid.uuid4()))
                     if entry["role"] and entry["interlocutor_id"] is not None: dq.append(entry)
-                    else: logger.warning(f"Skip history entry missing info: {entry.get('entry_id')}")
+                    else: logger.warning(f"Skip history missing info: {entry.get('entry_id')}")
                 except (ValueError, TypeError, KeyError) as e: logger.warning(f"Skip invalid history entry: {entry.get('entry_id')} - Error: {e}")
-            else: logger.warning(f"Skip non-dict entry in global history: {entry}")
-    else: logger.warning(f"Invalid history format: {loaded_history_data}")
+            else: logger.warning(f"Skip non-dict history entry: {entry}")
+    else: logger.warning(f"Invalid history format: {type(loaded_history_data)}")
     conversation_history = {GLOBAL_HISTORY_KEY: dq}
-    persona_prompt = _load_text(PROMPTS_DIR / "persona_prompt.txt", DEFAULT_PERSONA_PROMPT); random_dm_prompt = _load_text(PROMPTS_DIR / "random_dm_prompt.txt", DEFAULT_RANDOM_DM_PROMPT); weather_config = _load_json(WEATHER_CONFIG_FILE, {"last_location": None})
-    if not SUMMARIZED_HISTORY_FILE.exists(): 
-        try: SUMMARIZED_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True); SUMMARIZED_HISTORY_FILE.touch(); logger.info(f"Created empty summary file: {SUMMARIZED_HISTORY_FILE}") 
-        except Exception as e: logger.error(f"Failed create summary file: {SUMMARIZED_HISTORY_FILE}", exc_info=e)
+    persona_prompt = _load_text("persona_prompt.txt", DEFAULT_PERSONA_PROMPT); random_dm_prompt = _load_text("random_dm_prompt.txt", DEFAULT_RANDOM_DM_PROMPT)
+    if not SUMMARIZED_HISTORY_FILE.exists():
+        try: SUMMARIZED_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True); SUMMARIZED_HISTORY_FILE.touch(); logger.info(f"Created empty summary file: {SUMMARIZED_HISTORY_FILE}")
+        except Exception as e: logger.error(f"Create summary file error: {SUMMARIZED_HISTORY_FILE}", exc_info=e)
     logger.info("All configurations and data loaded.")
 
 # --- 保存関数 ---
-def _save_json(filepath: Path, data: Any):
-    """JSONファイルに安全に書き込む (datetime/deque/uuid対応)"""
+def _save_primary_config(config_data: Dict[str, Any]):
+    data_to_save = None
+    with user_data_lock:
+        def complex_serializer_encrypt(obj):
+            if isinstance(obj, datetime.datetime): return obj.isoformat()
+            if isinstance(obj, deque): return list(obj)
+            if isinstance(obj, uuid.UUID): return str(obj)
+            try: json.dumps(obj); return obj
+            except TypeError: return str(obj)
+        serializable_data = json.loads(json.dumps(config_data, default=complex_serializer_encrypt))
+        if "secrets" in serializable_data and isinstance(serializable_data["secrets"], dict):
+            secrets_section = serializable_data["secrets"]
+            for key in SECRET_KEYS:
+                plain_value = secrets_section.get(key)
+                secrets_section[key] = encrypt_string(plain_value) if plain_value else ""
+        else: logger.error("Invalid 'secrets' section during save."); serializable_data["secrets"] = {key: "" for key in SECRET_KEYS}
+        data_to_save = serializable_data
+    if data_to_save is None: logger.error("Failed to prepare data for saving."); return
+    try:
+        PRIMARY_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temp_filepath = PRIMARY_CONFIG_FILE.with_suffix(PRIMARY_CONFIG_FILE.suffix + '.tmp')
+        with open(temp_filepath, 'w', encoding='utf-8') as f: json.dump(data_to_save, f, indent=4, ensure_ascii=False)
+        os.replace(temp_filepath, PRIMARY_CONFIG_FILE); logger.info(f"Saved primary config: {PRIMARY_CONFIG_FILE}")
+    except Exception as e:
+        logger.error(f"Save primary config error: {PRIMARY_CONFIG_FILE}", exc_info=e)
+        if 'temp_filepath' in locals() and temp_filepath.exists():
+            try: os.remove(temp_filepath)
+            except OSError as remove_e: logger.error(f"Remove temp file error {temp_filepath}", exc_info=remove_e)
+
+def _save_json(filename: str, data: Any):
+    data_filepath = Path(user_data_dir(APP_NAME, APP_AUTHOR)) / filename
     try:
         def complex_serializer(obj):
             if isinstance(obj, datetime.datetime): return obj.isoformat()
@@ -145,366 +216,167 @@ def _save_json(filepath: Path, data: Any):
             if isinstance(obj, uuid.UUID): return str(obj)
             try: json.dumps(obj); return obj
             except TypeError: return str(obj)
-        filepath.parent.mkdir(parents=True, exist_ok=True); temp_filepath = filepath.with_suffix(filepath.suffix + '.tmp')
+        data_filepath.parent.mkdir(parents=True, exist_ok=True)
+        temp_filepath = data_filepath.with_suffix(data_filepath.suffix + '.tmp')
         with open(temp_filepath, 'w', encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False, default=complex_serializer)
-        os.replace(temp_filepath, filepath); logger.debug(f"Saved JSON: {filepath}")
+        os.replace(temp_filepath, data_filepath); logger.debug(f"Saved JSON: {data_filepath}")
     except Exception as e:
-        logger.error(f"Save error: {filepath}", exc_info=e)
-        if 'temp_filepath' in locals() and temp_filepath.exists():
-            try: os.remove(temp_filepath)
-            except OSError as remove_e: logger.error(f"Failed to remove temp file {temp_filepath}", exc_info=remove_e)
-
-def _save_text(filepath: Path, text: str):
-    """テキストファイルに安全に書き込む"""
-    try:
-        filepath.parent.mkdir(parents=True, exist_ok=True); temp_filepath = filepath.with_suffix(filepath.suffix + '.tmp')
-        with open(temp_filepath, 'w', encoding='utf-8') as f: f.write(text)
-        os.replace(temp_filepath, filepath); logger.debug(f"Saved text: {filepath}")
-    except Exception as e:
-        logger.error(f"Save error: {filepath}", exc_info=e)
+        logger.error(f"Save JSON error: {data_filepath}", exc_info=e)
         if 'temp_filepath' in locals() and temp_filepath.exists():
              try: os.remove(temp_filepath)
-             except OSError as remove_e: logger.error(f"Failed to remove temp file {temp_filepath}", exc_info=remove_e)
+             except OSError as remove_e: logger.error(f"Remove temp file error {temp_filepath}", exc_info=remove_e)
 
-async def save_user_data_nolock():
-    """ユーザーデータを保存 (ロックなし)"""
-    try: _save_json(USER_DATA_FILE, user_data)
-    except Exception as e: logger.error("Failed save user_data.json", exc_info=e)
+def _save_text(filename: str, text: str):
+    user_filepath = CONFIG_BASE_DIR / "prompts" / filename
+    try:
+        user_filepath.parent.mkdir(parents=True, exist_ok=True)
+        temp_filepath = user_filepath.with_suffix(user_filepath.suffix + '.tmp')
+        with open(temp_filepath, 'w', encoding='utf-8') as f: f.write(text)
+        os.replace(temp_filepath, user_filepath); logger.debug(f"Saved text: {user_filepath}")
+    except Exception as e:
+        logger.error(f"Save text error: {user_filepath}", exc_info=e)
+        if 'temp_filepath' in locals() and temp_filepath.exists():
+             try: os.remove(temp_filepath)
+             except OSError as remove_e: logger.error(f"Remove temp file error {temp_filepath}", exc_info=remove_e)
 
+def save_app_config(): _save_primary_config(app_config)
+def save_persona_prompt(): _save_text("persona_prompt.txt", persona_prompt)
+def save_random_dm_prompt(): _save_text("random_dm_prompt.txt", random_dm_prompt)
 async def save_conversation_history_nolock():
-     """会話履歴を保存 (ロックなし)"""
-     try: _save_json(HISTORY_FILE, conversation_history)
-     except Exception as e: logger.error("Failed save conversation_history.json", exc_info=e)
-
-def save_bot_settings():
-    """Bot基本設定を保存"""
-    _save_json(BOT_CONFIG_FILE, bot_settings)
-
-def save_channel_settings():
-    """チャンネル設定を保存"""
-    _save_json(CHANNEL_SETTINGS_FILE, channel_settings)
-
-def save_gemini_config():
-    """Gemini設定を保存"""
-    _save_json(GEMINI_CONFIG_FILE, gemini_config)
-
-def save_generation_config():
-    """生成設定を保存"""
-    config_to_save = generation_config.copy(); _save_json(GENERATION_CONFIG_FILE, config_to_save)
-
-def save_persona_prompt():
-    """ペルソナプロンプトを保存"""
-    _save_text(PROMPTS_DIR / "persona_prompt.txt", persona_prompt)
-
-def save_random_dm_prompt():
-    """ランダムDMプロンプトを保存"""
-    _save_text(PROMPTS_DIR / "random_dm_prompt.txt", random_dm_prompt)
-
-def save_weather_config():
-    """天気設定を保存"""
-    _save_json(WEATHER_CONFIG_FILE, weather_config)
-
-def save_summary_config():
-    """要約設定を保存"""
-    _save_json(SUMMARY_CONFIG_FILE, summary_config); logger.debug(f"Saved summary config to {SUMMARY_CONFIG_FILE}")
+    try: 
+        async with file_access_lock: _save_json(HISTORY_FILENAME, conversation_history) # ★ HISTORY_FILENAME を使用
+    except Exception as e: logger.error("Save history error", exc_info=e)
 
 # --- 設定値取得関数 ---
-def get_max_history() -> int:
-    """最大履歴保持件数を取得"""
-    return bot_settings.get('max_history', DEFAULT_MAX_HISTORY)
-
-def get_max_response_length() -> int:
-    """最大応答文字数を取得"""
-    return bot_settings.get('max_response_length', DEFAULT_MAX_RESPONSE_LENGTH)
-
+def get_discord_token() -> Optional[str]: return app_config.get("secrets", {}).get("discord_token")
+def get_gemini_api_key() -> Optional[str]: return app_config.get("secrets", {}).get("gemini_api_key")
+def get_weather_api_key() -> Optional[str]: return app_config.get("secrets", {}).get("weather_api_key")
+def get_delete_history_password() -> Optional[str]: return app_config.get("secrets", {}).get("delete_history_password")
+def get_max_history() -> int: return app_config.get("bot_settings", {}).get('max_history', DEFAULT_MAX_HISTORY)
+def get_max_response_length() -> int: return app_config.get("bot_settings", {}).get('max_response_length', DEFAULT_MAX_RESPONSE_LENGTH)
 def get_nickname(user_id: int) -> Optional[str]:
-    """ユーザーの固有名（ニックネーム）を取得"""
-    return user_data.get(str(user_id), {}).get("nickname")
-
+    with user_data_lock: return app_config.get("user_data", {}).get(str(user_id), {}).get("nickname")
 def get_all_user_data() -> Dict[str, Dict[str, Any]]:
-    """全ユーザーデータを取得（コピー）"""
-    return user_data.copy()
-
-def get_allowed_channels(server_id: str) -> List[int]:
-    """指定サーバーの許可チャンネルリストを取得"""
-    return channel_settings.get(server_id, [])
-
-def get_all_channel_settings() -> Dict[str, List[int]]:
-    """全チャンネル設定を取得（コピー）"""
-    return channel_settings.copy()
-
-def get_model_name() -> str:
-    """メインのGeminiモデル名を取得"""
-    return gemini_config.get('model_name', DEFAULT_GEMINI_CONFIG['model_name'])
-
-def get_safety_settings_list() -> List[Dict[str, str]]:
-    """メインの安全性設定リストを取得（コピー）"""
-    return gemini_config.get('safety_settings', DEFAULT_SAFETY_SETTINGS.copy())
-
-def get_generation_config_dict() -> Dict[str, Any]:
-    """メインの生成設定辞書を取得（コピー）"""
-    return generation_config.copy()
-
-def get_persona_prompt() -> str:
-    """ペルソナプロンプトを取得"""
-    return persona_prompt
-
-def get_random_dm_prompt() -> str:
-    """ランダムDMプロンプトを取得"""
-    return random_dm_prompt
-
-def get_default_random_dm_config() -> Dict[str, Any]:
-    """デフォルトのランダムDM設定を取得（コピー）"""
-    return DEFAULT_RANDOM_DM_CONFIG.copy()
-
+     with user_data_lock: return app_config.get("user_data", {}).copy()
+def get_allowed_channels(server_id: str) -> List[int]: return app_config.get("channel_settings", {}).get(str(server_id), []) # ★ server_id を文字列に変換
+def get_all_channel_settings() -> Dict[str, List[int]]: return app_config.get("channel_settings", {}).copy()
+def get_model_name() -> str: return app_config.get("gemini_config", {}).get('model_name', DEFAULT_GEMINI_CONFIG['model_name'])
+def get_safety_settings_list() -> List[Dict[str, str]]: return app_config.get("gemini_config", {}).get('safety_settings', DEFAULT_SAFETY_SETTINGS.copy())
+def get_generation_config_dict() -> Dict[str, Any]: return app_config.get("generation_config", {}).copy()
+def get_persona_prompt() -> str: return persona_prompt
+def get_random_dm_prompt() -> str: return random_dm_prompt
+def get_default_random_dm_config() -> Dict[str, Any]: return DEFAULT_RANDOM_DM_CONFIG.copy()
 def get_global_history() -> Deque[Dict[str, Any]]:
-    """グローバル履歴dequeを取得（本体）"""
-    max_hist = get_max_history()
-    if GLOBAL_HISTORY_KEY not in conversation_history or not isinstance(conversation_history.get(GLOBAL_HISTORY_KEY), deque) or conversation_history[GLOBAL_HISTORY_KEY].maxlen != max_hist:
-        current_items = list(conversation_history.get(GLOBAL_HISTORY_KEY, [])); conversation_history[GLOBAL_HISTORY_KEY] = deque(current_items, maxlen=max_hist)
+    max_hist = get_max_history(); global_deque = conversation_history.get(GLOBAL_HISTORY_KEY)
+    if not isinstance(global_deque, deque) or global_deque.maxlen != max_hist:
+        current_items = list(global_deque or []); conversation_history[GLOBAL_HISTORY_KEY] = deque(current_items, maxlen=max_hist)
     return conversation_history[GLOBAL_HISTORY_KEY]
-
-def get_all_history() -> Dict[str, Deque[Dict[str, Any]]]:
-    """全履歴データを取得（本体）"""
-    return conversation_history
-
-def get_last_weather_location() -> Optional[str]:
-    """最後の天気取得場所を取得"""
-    return weather_config.get("last_location")
-
-def get_summary_model_name() -> str:
-    """要約用モデル名を取得"""
-    return summary_config.get('summary_model_name', DEFAULT_SUMMARY_MODEL)
-
-def get_summary_max_prompt_tokens() -> int:
-    """要約プロンプト最大トークン数を取得"""
-    return summary_config.get('summary_max_prompt_tokens', DEFAULT_SUMMARY_MAX_TOKENS)
-
-def get_summary_generation_config_dict() -> Dict[str, Any]:
-    """要約用生成設定辞書を取得（コピー）"""
-    return summary_config.get('summary_generation_config', DEFAULT_SUMMARY_GENERATION_CONFIG.copy())
-
-# --- ★ 新しいゲッター関数: 全ユーザーのIDと固有名マップ ★ ---
+def get_all_history() -> Dict[str, Deque[Dict[str, Any]]]: return conversation_history
+def get_last_weather_location() -> Optional[str]: return app_config.get("weather_config", {}).get("last_location")
+def get_summary_model_name() -> str: return app_config.get("summary_config", {}).get('summary_model_name', DEFAULT_SUMMARY_MODEL)
+def get_summary_max_prompt_tokens() -> int: return app_config.get("summary_config", {}).get('summary_max_prompt_tokens', DEFAULT_SUMMARY_MAX_TOKENS)
+def get_summary_generation_config_dict() -> Dict[str, Any]: return app_config.get("summary_config", {}).get('summary_generation_config', DEFAULT_SUMMARY_GENERATION_CONFIG.copy())
 def get_all_user_identifiers() -> Dict[int, str]:
-    """Botが認識している全ユーザーのIDと固有名(ニックネーム優先)の辞書を返す"""
-    identifiers = {}
-    # user_data はグローバル変数なのでロック不要で読み取り可能
-    for uid_str, u_data in user_data.items():
-        try:
-            uid = int(uid_str)
-            # ニックネーム（固有名）があればそれを使う
-            nickname = u_data.get("nickname")
-            if nickname:
-                identifiers[uid] = nickname
-            else:
-                # ニックネームがない場合、ここでは "User <ID>" 形式で返す
-                # ChatCog側で表示名に変換する処理があるため
-                identifiers[uid] = f"User {uid}"
-        except ValueError:
-            logger.warning(f"Invalid user ID found in user_data: {uid_str}")
+    identifiers = {};
+    with user_data_lock: user_data_dict = app_config.get("user_data", {}).copy()
+    for uid_str, u_data in user_data_dict.items():
+        try: uid = int(uid_str); nickname = u_data.get("nickname"); identifiers[uid] = nickname if nickname else f"User {uid}"
+        except ValueError: logger.warning(f"Invalid user ID: {uid_str}")
     return identifiers
 
-# --- 設定値更新関数 (ロック付き) ---
-async def update_max_history_async(new_length: int):
-    """最大履歴保持件数を更新"""
-    global bot_settings, conversation_history; 
+# --- 設定値更新関数 ---
+def update_secret_in_memory(key: str, value: Optional[str]):
+    if key in SECRET_KEYS: app_config.setdefault("secrets", {})[key] = value; logger.debug(f"Updated secret '{key}' in memory.")
+    else: logger.warning(f"Attempt update non-secret key '{key}'")
+def update_max_history_in_memory(new_length: int):
+    global conversation_history
     if new_length >= 0:
-        async with data_lock: bot_settings['max_history'] = new_length; logger.debug(f"Updating maxlen global history deque to {new_length}...");
-        if GLOBAL_HISTORY_KEY in conversation_history and isinstance(conversation_history[GLOBAL_HISTORY_KEY], deque): conversation_history[GLOBAL_HISTORY_KEY] = deque(conversation_history[GLOBAL_HISTORY_KEY], maxlen=new_length)
+        app_config.setdefault("bot_settings", {})['max_history'] = new_length
+        global_deque = conversation_history.get(GLOBAL_HISTORY_KEY)
+        if isinstance(global_deque, deque): conversation_history[GLOBAL_HISTORY_KEY] = deque(global_deque, maxlen=new_length)
         else: conversation_history[GLOBAL_HISTORY_KEY] = deque(maxlen=new_length)
-        save_bot_settings(); logger.info(f"Updated max_history to {new_length}")
-
-async def update_nickname_async(user_id: int, nickname: str):
-    """ユーザーの固有名（ニックネーム）を更新"""
-    global user_data; user_id_str = str(user_id); 
-    async with data_lock: user_data.setdefault(user_id_str, {})["nickname"] = nickname; await save_user_data_nolock(); logger.info(f"Updated nickname for user {user_id}")
-
-async def remove_nickname_async(user_id: int) -> bool:
-    """ユーザーの固有名（ニックネーム）を削除"""
-    global user_data; user_id_str = str(user_id); removed = False; 
-    async with data_lock:
-        if user_id_str in user_data and "nickname" in user_data[user_id_str]:
-            del user_data[user_id_str]["nickname"];
-            if not user_data[user_id_str]: del user_data[user_id_str]
-            await save_user_data_nolock(); removed = True
-    if removed: logger.info(f"Removed nickname for user {user_id}"); return removed
-    return False # 削除対象がなかった場合
-
-async def update_random_dm_config_async(user_id: int, updates: Dict[str, Any]):
-    """ランダムDM設定を更新"""
-    global user_data; user_id_str = str(user_id); updated_keys = []; 
-    async with data_lock:
-        user_settings = user_data.setdefault(user_id_str, {}); current_dm_config = user_settings.setdefault("random_dm", get_default_random_dm_config())
-        for key, value in updates.items():
-             if key in current_dm_config:
-                 if key in ["last_interaction", "next_send_time"] and isinstance(value, datetime.datetime): dt_obj = value; current_dm_config[key] = dt_obj.astimezone(); updated_keys.append(key)
-                 elif key in ["min_interval", "max_interval", "stop_start_hour", "stop_end_hour"] and (value is None or isinstance(value, int)): current_dm_config[key] = value; updated_keys.append(key)
-                 elif key == "enabled" and isinstance(value, bool): current_dm_config[key] = value; updated_keys.append(key)
-                 else: logger.warning(f"Ignore update key '{key}' invalid type/value: {value}")
-             else: logger.warning(f"Ignore unknown key '{key}' in update_random_dm_config_async")
-        if updated_keys: await save_user_data_nolock(); logger.info(f"Updated random DM config user {user_id}. Keys: {updated_keys}")
-        else: logger.debug(f"No valid updates random DM config user {user_id}.")
-
-def update_safety_setting(category_value: str, threshold_value: str):
-    """メインの安全性設定を更新"""
-    global gemini_config; updated = False; current_settings = gemini_config.get('safety_settings', DEFAULT_SAFETY_SETTINGS.copy()); new_settings = []
-    for setting in current_settings:
-        if setting.get("category") == category_value: new_settings.append({"category": category_value, "threshold": threshold_value}); updated = True
-        else: new_settings.append(setting)
-    if not updated: new_settings.append({"category": category_value, "threshold": threshold_value})
-    gemini_config['safety_settings'] = new_settings; save_gemini_config()
-
-async def update_last_weather_location_async(location: Optional[str]):
-    """最後の天気取得場所を更新"""
-    global weather_config; 
-    async with data_lock: weather_config["last_location"] = location; save_weather_config()
-    if location: logger.info(f"Updated last weather location to: {location}") 
-    else: logger.info("Cleared last weather location.")
-
-def update_summary_model_name(model_name: str):
-    """要約用モデル名を更新"""
-    global summary_config; summary_config["summary_model_name"] = model_name; save_summary_config(); logger.info(f"Updated summary model name to: {model_name}")
-
-def update_summary_max_prompt_tokens(max_tokens: int):
-    """要約プロンプト最大トークン数を更新"""
-    global summary_config; 
-    if max_tokens >= 0: summary_config["summary_max_prompt_tokens"] = max_tokens; save_summary_config(); logger.info(f"Updated summary max prompt tokens to: {max_tokens}") 
-    else: logger.warning(f"Invalid summary max prompt tokens value: {max_tokens}.")
-
-def update_summary_generation_config(key: str, value: Any):
-    """要約用生成設定の特定キーを更新"""
-    global summary_config; valid_keys = DEFAULT_SUMMARY_GENERATION_CONFIG.keys()
-    if key in valid_keys:
-        if key in ["temperature", "top_p"] and not isinstance(value, (int, float)): logger.warning(f"Invalid type for summary {key}"); return
-        if key in ["top_k", "candidate_count", "max_output_tokens"] and not isinstance(value, int): logger.warning(f"Invalid type for summary {key}"); return
-        current_gen_config = summary_config.setdefault("summary_generation_config", DEFAULT_SUMMARY_GENERATION_CONFIG.copy())
-        current_gen_config[key] = value; save_summary_config(); logger.info(f"Updated summary generation config: {key} = {value}")
-    else: logger.warning(f"Invalid key for summary generation config: {key}")
+        logger.debug(f"Updated max_history to {new_length} in memory.")
+    else: logger.warning(f"Invalid max_history: {new_length}")
+def update_nickname_in_memory(user_id: int, nickname: str):
+    user_id_str = str(user_id)
+    with user_data_lock: app_config.setdefault("user_data", {}).setdefault(user_id_str, {})["nickname"] = nickname
+    logger.debug(f"Updated nickname for user {user_id} in memory.")
+def remove_nickname_in_memory(user_id: int) -> bool:
+    user_id_str = str(user_id); removed = False
+    with user_data_lock:
+        user_data_dict = app_config.get("user_data", {})
+        if user_id_str in user_data_dict and "nickname" in user_data_dict[user_id_str]:
+            del user_data_dict[user_id_str]["nickname"]
+            if not user_data_dict[user_id_str]: del user_data_dict[user_id_str]
+            removed = True; logger.debug(f"Removed nickname for user {user_id} in memory.")
+    return removed
 
 # --- 履歴操作 ---
 async def add_history_entry_async( current_interlocutor_id: int, channel_id: Optional[int], role: str, parts_dict: List[Dict[str, Any]], entry_author_id: int ) -> Optional[Dict[str, Any]]:
-    """会話履歴エントリを追加し、押し出されたエントリを返す"""
-    global conversation_history; 
     if role not in ["user", "model"]: logger.error(f"Invalid role '{role}'"); return None
-    max_hist = get_max_history(); pushed_out_entry = None; 
-    async with data_lock:
-        if GLOBAL_HISTORY_KEY not in conversation_history or not isinstance(conversation_history.get(GLOBAL_HISTORY_KEY), deque) or conversation_history[GLOBAL_HISTORY_KEY].maxlen != max_hist:
-            current_items = list(conversation_history.get(GLOBAL_HISTORY_KEY, [])); conversation_history[GLOBAL_HISTORY_KEY] = deque(current_items, maxlen=max_hist)
-        current_deque = conversation_history[GLOBAL_HISTORY_KEY]
-        if len(current_deque) == max_hist and max_hist > 0: pushed_out_entry = current_deque[0].copy(); logger.debug(f"History full. Entry to push out: {pushed_out_entry.get('entry_id')}")
-        entry = { "entry_id": str(uuid.uuid4()), "role": role, "parts": parts_dict, "channel_id": channel_id, "interlocutor_id": entry_author_id, "current_interlocutor_id": current_interlocutor_id, "timestamp": datetime.datetime.now().astimezone() }
-        current_deque.append(entry); logger.debug(f"Appended entry {entry['entry_id']}. History len: {len(current_deque)}"); await save_conversation_history_nolock()
+    max_hist = get_max_history(); pushed_out_entry = None
+    async with file_access_lock:
+        global_deque = get_global_history();
+        if len(global_deque) == max_hist and max_hist > 0: pushed_out_entry = global_deque[0].copy(); logger.debug(f"History full push out: {pushed_out_entry.get('entry_id')}")
+        entry = {"entry_id": str(uuid.uuid4()), "role": role, "parts": parts_dict, "channel_id": channel_id, "interlocutor_id": entry_author_id, "current_interlocutor_id": current_interlocutor_id, "timestamp": datetime.datetime.now().astimezone()}
+        global_deque.append(entry); logger.debug(f"Appended entry {entry['entry_id']}. History len: {len(global_deque)}")
+        await save_conversation_history_nolock()
     return pushed_out_entry
-
 async def clear_all_history_async():
-    """全会話履歴をクリア"""
-    global conversation_history; 
-    async with data_lock: conversation_history.setdefault(GLOBAL_HISTORY_KEY, deque(maxlen=get_max_history())).clear(); await save_conversation_history_nolock(); logger.warning("Cleared all global conversation history.")
-
+    async with file_access_lock: get_global_history().clear(); await save_conversation_history_nolock()
+    logger.warning("Cleared all global conversation history.")
 async def clear_user_history_async(target_user_id: int) -> int:
-    """グローバル履歴から指定ユーザーが関与したエントリを削除する"""
-    global conversation_history; cleared_count = 0; target_user_id_str = str(target_user_id);
-    async with data_lock:
-        if GLOBAL_HISTORY_KEY not in conversation_history:
-            logger.debug(f"Global history key '{GLOBAL_HISTORY_KEY}' not found. Nothing to clear for user {target_user_id_str}.")
-            return 0 # ★ current_deque を参照する前に return
-
-        # ★ GLOBAL_HISTORY_KEY が存在する場合のみ current_deque を取得 ★
-        current_deque = conversation_history[GLOBAL_HISTORY_KEY]
-        # ★ dequeが存在しない、またはmaxlenがない場合のエラーハンドリングを追加（より安全に）
-        if not isinstance(current_deque, deque):
-            logger.error(f"conversation_history['{GLOBAL_HISTORY_KEY}'] is not a deque. Cannot clear user history.")
-            return 0
-        max_len = current_deque.maxlen
-        new_deque = deque(maxlen=max_len)
-        original_len = len(current_deque)
-        logger.info(f"Clearing global history entries involving user {target_user_id_str}. Original length: {original_len}")
-
-        # deque が空の場合の処理を追加
-        if original_len == 0:
-            logger.debug("Global history deque is empty. Nothing to clear.")
-            return 0
-
-        for entry in list(current_deque): # イテレーション用にリスト化
-            if entry.get("interlocutor_id") != target_user_id and entry.get("current_interlocutor_id") != target_user_id:
-                new_deque.append(entry)
-            else:
-                logger.debug(f"Removing entry involving user {target_user_id}: {entry.get('entry_id')}")
-
+    cleared_count = 0
+    async with file_access_lock:
+        global_deque = get_global_history();
+        if not global_deque: return 0; original_len = len(global_deque)
+        new_deque = deque(maxlen=global_deque.maxlen)
+        for entry in list(global_deque):
+             if entry.get("interlocutor_id") != target_user_id and entry.get("current_interlocutor_id") != target_user_id: new_deque.append(entry)
+             else: logger.debug(f"Removing entry user {target_user_id}: {entry.get('entry_id')}")
         cleared_count = original_len - len(new_deque)
-        if cleared_count > 0:
-            conversation_history[GLOBAL_HISTORY_KEY] = new_deque
-            await save_conversation_history_nolock()
-            logger.info(f"Cleared {cleared_count} entries for user {target_user_id}.")
-        else:
-             logger.debug(f"No entries involving user {target_user_id_str} found to clear.")
+        if cleared_count > 0: conversation_history[GLOBAL_HISTORY_KEY] = new_deque; await save_conversation_history_nolock(); logger.info(f"Cleared {cleared_count} entries user {target_user_id}.")
+        else: logger.debug(f"No entries user {target_user_id} found.")
     return cleared_count
-
 async def clear_channel_history_async(channel_id: int) -> int:
-    """グローバル履歴から指定チャンネルのエントリを削除する"""
-    global conversation_history; cleared_count = 0;
-    async with data_lock:
-        if GLOBAL_HISTORY_KEY not in conversation_history:
-            logger.debug(f"Global history key '{GLOBAL_HISTORY_KEY}' not found. Nothing to clear for channel {channel_id}.")
-            return 0 # ★ current_deque を参照する前に return
-
-        # ★ GLOBAL_HISTORY_KEY が存在する場合のみ current_deque を取得 ★
-        current_deque = conversation_history[GLOBAL_HISTORY_KEY]
-        # ★ dequeが存在しない、またはmaxlenがない場合のエラーハンドリングを追加
-        if not isinstance(current_deque, deque):
-            logger.error(f"conversation_history['{GLOBAL_HISTORY_KEY}'] is not a deque. Cannot clear channel history.")
-            return 0
-        max_len = current_deque.maxlen
-        new_deque = deque(maxlen=max_len)
-        original_len = len(current_deque)
-        logger.info(f"Clearing global history entries for channel {channel_id}. Original length: {original_len}")
-
-        # deque が空の場合の処理を追加
-        if original_len == 0:
-            logger.debug("Global history deque is empty. Nothing to clear.")
-            return 0
-
-        for entry in list(current_deque): # イテレーション用にリスト化
-            if entry.get("channel_id") != channel_id:
-                new_deque.append(entry)
-            else:
-                logger.debug(f"Removing entry for channel {channel_id}: {entry.get('entry_id')}")
-
+    cleared_count = 0
+    async with file_access_lock:
+        global_deque = get_global_history();
+        if not global_deque: return 0; original_len = len(global_deque)
+        new_deque = deque(maxlen=global_deque.maxlen)
+        for entry in list(global_deque):
+            if entry.get("channel_id") != channel_id: new_deque.append(entry)
+            else: logger.debug(f"Removing entry channel {channel_id}: {entry.get('entry_id')}")
         cleared_count = original_len - len(new_deque)
-        if cleared_count > 0:
-            conversation_history[GLOBAL_HISTORY_KEY] = new_deque
-            await save_conversation_history_nolock()
-            logger.info(f"Cleared {cleared_count} entries for channel {channel_id}.")
-        else:
-             logger.debug(f"No entries for channel {channel_id} found to clear.")
+        if cleared_count > 0: conversation_history[GLOBAL_HISTORY_KEY] = new_deque; await save_conversation_history_nolock(); logger.info(f"Cleared {cleared_count} entries channel {channel_id}.")
+        else: logger.debug(f"No entries channel {channel_id} found.")
     return cleared_count
 
 # --- 要約DB操作関数 ---
 async def load_summaries() -> List[Dict[str, Any]]:
-    """要約DB (JSONL) から全件読み込む"""
     summaries = [];
     if not SUMMARIZED_HISTORY_FILE.exists(): return summaries
     try:
-        async with data_lock:
+        async with file_access_lock:
             logger.debug(f"Loading summaries from {SUMMARIZED_HISTORY_FILE}...")
+            temp_summaries = []
             with open(SUMMARIZED_HISTORY_FILE, 'r', encoding='utf-8') as f:
                 for i, line in enumerate(f):
                     try:
                         summary_entry = json.loads(line)
                         for ts_key in ["added_timestamp", "original_timestamp"]:
-                            if ts_key in summary_entry and isinstance(summary_entry[ts_key], str):
-                                try: summary_entry[ts_key] = datetime.datetime.fromisoformat(summary_entry[ts_key]).astimezone()
-                                except ValueError: logger.warning(f"L{i+1}: Parse error ts '{summary_entry[ts_key]}' key '{ts_key}'."); summary_entry[ts_key] = None
-                        summaries.append(summary_entry)
-                    except json.JSONDecodeError: logger.warning(f"L{i+1}: Skip invalid JSON line: {line.strip()}")
+                             if ts_key in summary_entry and isinstance(summary_entry[ts_key], str):
+                                 try: dt_obj = datetime.datetime.fromisoformat(summary_entry[ts_key]); summary_entry[ts_key] = dt_obj.astimezone() if dt_obj.tzinfo is None else dt_obj
+                                 except ValueError: logger.warning(f"L{i+1}: Parse ts '{summary_entry[ts_key]}' key '{ts_key}'."); summary_entry[ts_key] = None
+                        temp_summaries.append(summary_entry)
+                    except json.JSONDecodeError: logger.warning(f"L{i+1}: Skip invalid JSON: {line.strip()}")
+            summaries = temp_summaries
         logger.info(f"Loaded {len(summaries)} summaries from {SUMMARIZED_HISTORY_FILE}.")
         return summaries
-    except Exception as e: logger.error(f"Error loading summaries: {SUMMARIZED_HISTORY_FILE}", exc_info=e); return []
-
+    except Exception as e: logger.error(f"Load summaries error: {SUMMARIZED_HISTORY_FILE}", exc_info=e); return []
 async def append_summary(summary_entry: Dict[str, Any]):
-    """要約エントリをJSONLファイルに追記する"""
     try:
-        async with data_lock:
+        async with file_access_lock:
             summary_id = summary_entry.get('summary_id', 'N/A'); logger.debug(f"Appending summary {summary_id} to {SUMMARIZED_HISTORY_FILE}...")
             def _serializer(obj):
                  if isinstance(obj, datetime.datetime): return obj.isoformat()
@@ -514,13 +386,15 @@ async def append_summary(summary_entry: Dict[str, Any]):
             SUMMARIZED_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
             with open(SUMMARIZED_HISTORY_FILE, 'a', encoding='utf-8') as f: json.dump(summary_entry, f, ensure_ascii=False, default=_serializer); f.write('\n')
         logger.info(f"Appended summary {summary_id} to {SUMMARIZED_HISTORY_FILE}.")
-    except Exception as e: logger.error(f"Error appending summary to {SUMMARIZED_HISTORY_FILE}", exc_info=e)
-
+    except Exception as e: logger.error(f"Append summary error: {SUMMARIZED_HISTORY_FILE}", exc_info=e)
 async def clear_summaries() -> bool:
-    """要約DBファイルを削除（クリア）する"""
-    logger.warning(f"Attempting to clear summary database file: {SUMMARIZED_HISTORY_FILE}")
-    async with data_lock:
+    logger.warning(f"Attempt clear summary DB: {SUMMARIZED_HISTORY_FILE}")
+    async with file_access_lock:
         try:
-            if SUMMARIZED_HISTORY_FILE.exists(): os.remove(SUMMARIZED_HISTORY_FILE); SUMMARIZED_HISTORY_FILE.touch(); logger.warning(f"Cleared and recreated summary database file: {SUMMARIZED_HISTORY_FILE}"); return True
-            else: logger.info("Summary database file does not exist, nothing to clear."); return True
-        except Exception as e: logger.error(f"Error clearing summary database file: {SUMMARIZED_HISTORY_FILE}", exc_info=e); return False
+            if SUMMARIZED_HISTORY_FILE.exists(): os.remove(SUMMARIZED_HISTORY_FILE); SUMMARIZED_HISTORY_FILE.touch(); logger.warning(f"Cleared summary DB: {SUMMARIZED_HISTORY_FILE}"); return True
+            else: logger.info("Summary DB not exist, nothing clear."); return True
+        except Exception as e: logger.error(f"Clear summary DB error: {SUMMARIZED_HISTORY_FILE}", exc_info=e); return False
+
+# --- 初期ロード ---
+load_all_configs()
+logger.info(f"Config Manager initialized. Config dir: {CONFIG_BASE_DIR}, Data dir: {user_data_dir(APP_NAME, APP_AUTHOR)}")

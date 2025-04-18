@@ -7,3 +7,7 @@ beautifulsoup4
 pillow
 aiohttp
 youtube_transcript_api
+flet
+cryptography
+appdirs
+pypubsub

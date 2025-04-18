@@ -40,7 +40,7 @@ class ChatCog(commands.Cog):
 
     def initialize_genai_client(self):
         try:
-            api_key = os.getenv("GOOGLE_AI_KEY")
+            api_key = config_manager.get_gemini_api_key()
             if not api_key: logger.error("GOOGLE_AI_KEY not found."); self.genai_client = None; return
             self.genai_client = genai.Client(api_key=api_key); logger.info("Gemini client initialized.")
         except Exception as e: logger.error("Failed to initialize Gemini client", exc_info=e); self.genai_client = None

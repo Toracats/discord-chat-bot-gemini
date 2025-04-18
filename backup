@@ -1,0 +1,43 @@
+import json
+import os
+from pathlib import Path
+import logging
+from collections import deque
+import datetime
+from typing import Dict, List, Any, Optional, Deque, Union
+import asyncio
+import uuid
+from appdirs import user_config_dir, user_data_dir
+from cryptography.fernet import Fernet, InvalidToken
+import threading
+
+logger = logging.getLogger(__name__)
+
+# --- アプリケーション情報 ---
+APP_NAME = "Discord_Chat_Bot" # ★ 要変更
+APP_AUTHOR = "Toracats" # ★ 要変更
+
+# --- パス設定 ---
+CONFIG_BASE_DIR = Path(user_config_dir(APP_NAME, APP_AUTHOR))
+PRIMARY_CONFIG_FILE = CONFIG_BASE_DIR / "app_config.json"
+LOG_BASE_DIR = Path(user_data_dir(APP_NAME, APP_AUTHOR)) / "logs"
+LOG_FILE = LOG_BASE_DIR / "bot.log"
+LOCAL_PROMPTS_DIR = Path("prompts") # ★ 追加: ローカルのプロンプトディレクトリ
+USER_DATA_DIR = Path(user_data_dir(APP_NAME, APP_AUTHOR)) # ★ 追加: ユーザーデータディレクトリ
+
+# --- ユーザーデータディレクトリ内のファイル名 ---
+HISTORY_FILENAME = "conversation_history.json" # ★ 追加
+SUMMARIZED_HISTORY_FILENAME = "summarized_history.jsonl"
+SUMMARIZED_HISTORY_FILE = USER_DATA_DIR / SUMMARIZED_HISTORY_FILENAME # ★ USER_DATA_DIRを使用
+
+# --- 暗号化設定 ---
+# 初回生成方法:
+# 1. Pythonインタプリタを開く (python または python3)
+# 2. from cryptography.fernet import Fernet
+# 3. print(Fernet.generate_key().decode())
+# 4. 表示されたキー文字列を下の ENCRYPTION_KEY の '' 内に貼り付ける
+ENCRYPTION_KEY = b'TYptY24SJ9ZWuiN_4XRgGRSKXE0Wg9oUH4_HWuRamHI=' # 要変更
+if ENCRYPTION_KEY == b'YOUR_GENERATED_FERNET_KEY_HERE': raise ValueError("Fernet key not configured.")
+try: fernet = Fernet(ENCRYPTION_KEY)
+except ValueError as e: logger.critical(f"Invalid Fernet key: {e}"); raise
+SECRET_KEYS = ["discord_token", "gemini_api_key", "weather_api_key", "delete_history_password"]
