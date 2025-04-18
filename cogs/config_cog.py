@@ -1,4 +1,4 @@
-# cogs/config_cog.py (要約設定コマンド追加)
+# cogs/config_cog.py (ランダムDMでfloat入力対応、秒変換時に切り捨て)
 
 import discord
 from discord.ext import commands
@@ -7,10 +7,10 @@ import logging
 from typing import Literal, Optional, Union
 import json
 import datetime
+import math # 分表示、float->int変換のために追加
 
 # config_manager モジュールから必要な関数・変数をインポート
 from utils import config_manager
-from google.genai import types as genai_types # ★インポート（型ヒントで使用する場合）
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class ConfigCog(commands.Cog):
     channel = app_commands.Group(name="channel", parent=config, description="チャンネル関連の設定")
     random_dm = app_commands.Group(name="random_dm", parent=config, description="ランダムDM関連の設定")
     response = app_commands.Group(name="response", parent=config, description="応答関連の設定")
-    summary = app_commands.Group(name="summary", parent=config, description="履歴要約機能関連の設定") # ★ 要約設定グループ
+    summary = app_commands.Group(name="summary", parent=config, description="履歴要約機能関連の設定")
 
     # --- メイン Gemini 設定 (変更なし) ---
     @gemini.command(name="show", description="現在のメインGemini関連設定を表示します")
@@ -42,7 +42,6 @@ class ConfigCog(commands.Cog):
             embed = discord.Embed(title="現在のメインGemini設定", color=discord.Color.blue())
             embed.add_field(name="モデル名 (Model Name)", value=f"`{model_name}`", inline=False)
             try:
-                # シリアライズ可能な型のみを抽出
                 serializable_gen_config = {k: v for k, v in gen_config_dict.items() if isinstance(v, (str, int, float, bool, list, dict, type(None)))}
                 gen_config_str = json.dumps(serializable_gen_config, indent=2, ensure_ascii=False)
             except TypeError:
@@ -56,11 +55,10 @@ class ConfigCog(commands.Cog):
             logger.error("Error in /config gemini show", exc_info=e)
             await interaction.followup.send(f"設定の表示中にエラーが発生しました: {e}", ephemeral=True)
 
-    @gemini.command(name="set_temperature", description="[メイン] 応答のランダム性 (Temperature) を設定します (0.0 ~ 2.0)") # Geminiは2.0までOKの場合あり
+    @gemini.command(name="set_temperature", description="[メイン] 応答のランダム性 (Temperature) を設定します (0.0 ~ 2.0)")
     @app_commands.describe(value="設定するTemperature値 (例: 0.9)")
     async def gemini_set_temperature(self, interaction: discord.Interaction, value: float):
         await interaction.response.defer(ephemeral=True)
-        # 温度の範囲チェックを緩和 (Geminiモデルに依存するため)
         if not (0.0 <= value <= 2.0):
              await interaction.followup.send("Temperatureは 0.0 から 2.0 の間で設定してください。", ephemeral=True); return
         try:
@@ -81,7 +79,6 @@ class ConfigCog(commands.Cog):
              logger.info(f"Main Model name set to {model_name} by {interaction.user}")
          except Exception as e: logger.error("Error in /config gemini set_model", exc_info=e); await interaction.followup.send(f"設定の保存中にエラーが発生しました: {e}", ephemeral=True)
 
-    # (他のメインGemini設定コマンド - set_safety, set_top_k, set_top_p, set_max_tokens - は変更なし)
     @gemini.command(name="set_safety", description="[メイン] 指定した危害カテゴリの安全しきい値を設定します")
     @app_commands.describe(category="設定するカテゴリ", threshold="設定するしきい値")
     @app_commands.choices(category=[ app_commands.Choice(name="Harassment", value="HARM_CATEGORY_HARASSMENT"), app_commands.Choice(name="Hate Speech", value="HARM_CATEGORY_HATE_SPEECH"), app_commands.Choice(name="Sexually Explicit", value="HARM_CATEGORY_SEXUALLY_EXPLICIT"), app_commands.Choice(name="Dangerous Content", value="HARM_CATEGORY_DANGEROUS_CONTENT"), ], threshold=[ app_commands.Choice(name="Block None", value="BLOCK_NONE"), app_commands.Choice(name="Block Only High", value="BLOCK_ONLY_HIGH"), app_commands.Choice(name="Block Medium and Above", value="BLOCK_MEDIUM_AND_ABOVE"), app_commands.Choice(name="Block Low and Above", value="BLOCK_LOW_AND_ABOVE"), ])
@@ -115,7 +112,7 @@ class ConfigCog(commands.Cog):
         except Exception as e: logger.error("Error in /config gemini set_max_tokens", exc_info=e); await interaction.followup.send(f"設定の保存中にエラーが発生しました: {e}", ephemeral=True)
 
 
-    # --- ★ 要約 Gemini 設定 ★ ---
+    # --- ★ 要約 Gemini 設定 ★ (変更なし) ---
     @summary.command(name="show", description="現在の履歴要約機能のGemini関連設定を表示します")
     async def summary_show(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -133,7 +130,6 @@ class ConfigCog(commands.Cog):
             except TypeError:
                 gen_config_str = str(gen_config_dict) # フォールバック
             embed.add_field(name="要約生成設定 (Generation Config)", value=f"```json\n{gen_config_str}\n```", inline=False)
-            # 要約に Safety Settings は通常不要と想定
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:
             logger.error("Error in /config summary show", exc_info=e)
@@ -202,8 +198,7 @@ class ConfigCog(commands.Cog):
         except Exception as e: logger.error("Error in /config summary set_max_output_tokens", exc_info=e); await interaction.followup.send(f"設定の保存中にエラーが発生しました: {e}", ephemeral=True)
 
 
-    # --- 他の設定グループ (prompt, user, channel, random_dm, response) は変更なし ---
-    # (prompt_show, prompt_set は変更なし)
+    # --- プロンプト設定 (変更なし) ---
     @prompt.command(name="show", description="指定した種類のプロンプトを表示します")
     @app_commands.describe(type="表示するプロンプトの種類")
     @app_commands.choices(type=[ app_commands.Choice(name="Persona", value="persona"), app_commands.Choice(name="Random DM", value="random_dm"), ])
@@ -260,49 +255,112 @@ class ConfigCog(commands.Cog):
                     except discord.NotFound: logger.warning(f"Could not send error followup for modal internal error")
         await interaction.response.send_modal(PromptModal(prompt_type_value))
 
-    # (user_set_nickname, user_show_nickname, user_remove_nickname は変更なし)
-    @user.command(name="set_nickname", description="ユーザーのニックネームを設定します")
-    @app_commands.describe(user="ニックネームを設定するユーザー", nickname="設定するニックネーム")
-    async def user_set_nickname(self, interaction: discord.Interaction, user: discord.User, nickname: str):
+    # --- ユーザー関連コマンド (ID指定対応) (変更なし) ---
+    @user.command(name="set_nickname", description="ユーザーのニックネームを設定します (ID指定)")
+    @app_commands.describe(
+        user_id="ニックネームを設定するユーザーのID (数字のみ)",
+        nickname="設定するニックネーム"
+    )
+    async def user_set_nickname(self, interaction: discord.Interaction, user_id: str, nickname: str):
          await interaction.response.defer(ephemeral=True)
          try:
-             old_nickname = config_manager.get_nickname(user.id)
-             await config_manager.update_nickname_async(user.id, nickname)
-             response_message = f"{user.mention} のニックネームを `{nickname}` に設定しました。"
+             try:
+                 target_user_id = int(user_id)
+             except ValueError:
+                 await interaction.followup.send("ユーザーIDは数字で入力してください。", ephemeral=True)
+                 return
+
+             try:
+                 target_user = await self.bot.fetch_user(target_user_id)
+             except discord.NotFound:
+                 await interaction.followup.send("指定されたIDのユーザーが見つかりませんでした。", ephemeral=True)
+                 return
+             except discord.HTTPException:
+                 await interaction.followup.send("ユーザー情報の取得中にエラーが発生しました。", ephemeral=True)
+                 return
+
+             old_nickname = config_manager.get_nickname(target_user_id)
+             await config_manager.update_nickname_async(target_user_id, nickname)
+             response_message = f"{target_user.mention} (`{target_user.name}`) のニックネームを `{nickname}` に設定しました。"
              if old_nickname: response_message += f"\n(以前のニックネーム: `{old_nickname}`)"
              response_message += "\n\n**ヒント:** 変更を応答にすぐに反映させたい場合は、`/history clear type:my` でご自身の会話履歴をクリアしてください。"
              await interaction.followup.send(response_message, ephemeral=True)
-             logger.info(f"Nickname for {user.name} (ID: {user.id}) set to '{nickname}' by {interaction.user}")
+             logger.info(f"Nickname for {target_user.name} (ID: {target_user_id}) set to '{nickname}' by {interaction.user}")
          except Exception as e:
              logger.error("Error in /config user set_nickname", exc_info=e)
              await interaction.followup.send(f"ニックネームの設定中にエラーが発生しました: {e}", ephemeral=True)
 
-    @user.command(name="show_nickname", description="ユーザーのニックネームを表示します")
-    @app_commands.describe(user="ニックネームを表示するユーザー (省略時: 自分)")
-    async def user_show_nickname(self, interaction: discord.Interaction, user: Optional[discord.User] = None):
-         await interaction.response.defer(ephemeral=True); target_user = user or interaction.user;
+    @user.command(name="show_nickname", description="ユーザーのニックネームを表示します (ID指定も可)")
+    @app_commands.describe(
+        user_id="[DM用] ニックネームを表示するユーザーのID (数字)",
+        user_mention="[サーバー用] ニックネームを表示するユーザーを選択 (IDより優先)"
+    )
+    async def user_show_nickname(self, interaction: discord.Interaction, user_id: Optional[str] = None, user_mention: Optional[discord.User] = None):
+         await interaction.response.defer(ephemeral=True)
+         target_user: Optional[discord.User] = None
+
+         if user_mention:
+            target_user = user_mention
+         elif user_id:
+            try:
+                target_user_id_int = int(user_id)
+                try:
+                    target_user = await self.bot.fetch_user(target_user_id_int)
+                except discord.NotFound:
+                    await interaction.followup.send("指定されたIDのユーザーが見つかりませんでした。", ephemeral=True)
+                    return
+                except discord.HTTPException:
+                    await interaction.followup.send("ユーザー情報の取得中にエラーが発生しました。", ephemeral=True)
+                    return
+            except ValueError:
+                await interaction.followup.send("ユーザーIDは数字で入力してください。", ephemeral=True)
+                return
+         else:
+            target_user = interaction.user
+
+         if not target_user:
+             await interaction.followup.send("対象ユーザーを特定できませんでした。", ephemeral=True); return
+
          try:
              nickname = config_manager.get_nickname(target_user.id)
-             if nickname: await interaction.followup.send(f"{target_user.mention} のニックネームは `{nickname}` です。", ephemeral=True)
-             else: await interaction.followup.send(f"{target_user.mention} にはニックネームが設定されていません。", ephemeral=True)
+             if nickname: await interaction.followup.send(f"{target_user.mention} (`{target_user.name}`) のニックネームは `{nickname}` です。", ephemeral=True)
+             else: await interaction.followup.send(f"{target_user.mention} (`{target_user.name}`) にはニックネームが設定されていません。", ephemeral=True)
          except Exception as e:
              logger.error("Error in /config user show_nickname", exc_info=e)
              await interaction.followup.send(f"ニックネームの表示中にエラーが発生しました: {e}", ephemeral=True)
 
-    @user.command(name="remove_nickname", description="ユーザーのニックネームを削除します")
-    @app_commands.describe(user="ニックネームを削除するユーザー")
-    async def user_remove_nickname(self, interaction: discord.Interaction, user: discord.User):
+    @user.command(name="remove_nickname", description="ユーザーのニックネームを削除します (ID指定)")
+    @app_commands.describe(
+        user_id="ニックネームを削除するユーザーのID (数字)"
+    )
+    async def user_remove_nickname(self, interaction: discord.Interaction, user_id: str):
         await interaction.response.defer(ephemeral=True)
         try:
-            current_nickname = config_manager.get_nickname(user.id)
+            try:
+                target_user_id = int(user_id)
+            except ValueError:
+                await interaction.followup.send("ユーザーIDは数字で入力してください。", ephemeral=True)
+                return
+
+            try:
+                target_user = await self.bot.fetch_user(target_user_id)
+            except discord.NotFound:
+                await interaction.followup.send("指定されたIDのユーザーが見つかりませんでした。", ephemeral=True)
+                return
+            except discord.HTTPException:
+                await interaction.followup.send("ユーザー情報の取得中にエラーが発生しました。", ephemeral=True)
+                return
+
+            current_nickname = config_manager.get_nickname(target_user_id)
             if current_nickname:
-                removed = await config_manager.remove_nickname_async(user.id)
-                if removed: await interaction.followup.send(f"{user.mention} のニックネーム (`{current_nickname}`) を削除しました。", ephemeral=True); logger.info(f"Nickname for {user.name} (ID: {user.id}) removed by {interaction.user}")
-                else: await interaction.followup.send(f"ニックネームの削除に失敗しました（内部エラー）。", ephemeral=True) # 基本的に発生しないはず
-            else: await interaction.followup.send(f"{user.mention} にはニックネームが設定されていません。", ephemeral=True)
+                removed = await config_manager.remove_nickname_async(target_user_id)
+                if removed: await interaction.followup.send(f"{target_user.mention} (`{target_user.name}`) のニックネーム (`{current_nickname}`) を削除しました。", ephemeral=True); logger.info(f"Nickname for {target_user.name} (ID: {target_user_id}) removed by {interaction.user}")
+                else: await interaction.followup.send(f"ニックネームの削除に失敗しました（内部エラー）。", ephemeral=True)
+            else: await interaction.followup.send(f"{target_user.mention} (`{target_user.name}`) にはニックネームが設定されていません。", ephemeral=True)
         except Exception as e: logger.error("Error in /config user remove_nickname", exc_info=e); await interaction.followup.send(f"ニックネームの削除中にエラーが発生しました: {e}", ephemeral=True)
 
-    # (channel_add, channel_remove, channel_list は変更なし)
+
+    # --- チャンネル設定 (変更なし) ---
     @channel.command(name="add", description="自動応答を許可するチャンネルを追加します")
     @app_commands.guild_only()
     @app_commands.describe(channel="許可するテキストチャンネル")
@@ -335,42 +393,83 @@ class ConfigCog(commands.Cog):
     async def channel_list(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True); server_id_str = str(interaction.guild_id);
         try:
-            allowed_ids = config_manager.get_allowed_channels(server_id_str) # ★ キーを str に修正
+            allowed_ids = config_manager.get_allowed_channels(server_id_str)
             if not allowed_ids: await interaction.followup.send("現在、このサーバーで自動応答が許可されているチャンネルはありません。", ephemeral=True); return
             channel_mentions = [];
             for channel_id in allowed_ids: channel = interaction.guild.get_channel(channel_id); channel_mentions.append(channel.mention if channel else f"不明なチャンネル (ID: {channel_id})")
             embed = discord.Embed(title=f"{interaction.guild.name} の自動応答許可チャンネル", description="\n".join(channel_mentions), color=discord.Color.purple()); await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e: logger.error("Error in /config channel list", exc_info=e); await interaction.followup.send(f"チャンネルリストの表示中にエラーが発生しました: {e}", ephemeral=True)
 
-    # (random_dm_set, random_dm_show は変更なし)
+
+    # --- ★★★ ランダムDM設定 (float入力対応) ★★★ ---
     @random_dm.command(name="set", description="自身のランダムDM設定を行います")
-    @app_commands.describe(enabled="ランダムDMを有効にするか (true/false)", min_interval="最小送信間隔 (秒, 0以上)", max_interval="最大送信間隔 (秒, 最小以上)", stop_start_hour="送信停止開始時刻 (0-23時, 省略可)", stop_end_hour="送信停止終了時刻 (0-23時, 省略可)")
-    async def random_dm_set(self, interaction: discord.Interaction, enabled: bool, min_interval: Optional[int] = None, max_interval: Optional[int] = None, stop_start_hour: Optional[int] = None, stop_end_hour: Optional[int] = None):
+    @app_commands.describe(
+        enabled="ランダムDMを有効にするか (true/false)",
+        min_interval="最小送信間隔 (分, 0以上, 小数可)", # ★ 説明変更
+        max_interval="最大送信間隔 (分, 最小以上, 小数可)", # ★ 説明変更
+        stop_start_hour="送信停止開始時刻 (0-23時, 省略可)",
+        stop_end_hour="送信停止終了時刻 (0-23時, 省略可)"
+    )
+    async def random_dm_set(self, interaction: discord.Interaction, enabled: bool,
+                             min_interval: Optional[float] = None, # ★ float に変更
+                             max_interval: Optional[float] = None, # ★ float に変更
+                             stop_start_hour: Optional[int] = None,
+                             stop_end_hour: Optional[int] = None):
         await interaction.response.defer(ephemeral=True); user_id = interaction.user.id;
         update_dict = {"enabled": enabled}
+
+        min_interval_seconds: Optional[int] = None
+        max_interval_seconds: Optional[int] = None
+
         if not enabled:
-            if min_interval is not None or max_interval is not None or stop_start_hour is not None or stop_end_hour is not None: await interaction.followup.send("ランダムDMを無効にする場合、他のパラメータは指定できません。", ephemeral=True); return
-            # 無効化のみを update_dict に設定
+            if min_interval is not None or max_interval is not None or stop_start_hour is not None or stop_end_hour is not None:
+                await interaction.followup.send("ランダムDMを無効にする場合、他のパラメータは指定できません。", ephemeral=True); return
         else:
-            if min_interval is None or max_interval is None: await interaction.followup.send("ランダムDMを有効にする場合、最小・最大送信間隔 (秒) を指定してください。", ephemeral=True); return
-            if not (isinstance(min_interval, int) and min_interval >= 0): await interaction.followup.send("最小送信間隔は0以上の整数 (秒) で指定してください。", ephemeral=True); return
-            if not (isinstance(max_interval, int) and max_interval >= min_interval): await interaction.followup.send(f"最大送信間隔は最小送信間隔 ({min_interval}秒) 以上の整数 (秒) で指定してください。", ephemeral=True); return
-            if stop_start_hour is not None and not (0 <= stop_start_hour <= 23): await interaction.followup.send("送信停止開始時刻は 0 から 23 の間で指定してください。", ephemeral=True); return
-            if stop_end_hour is not None and not (0 <= stop_end_hour <= 23): await interaction.followup.send("送信停止終了時刻は 0 から 23 の間で指定してください。", ephemeral=True); return
-            # 有効化と他のパラメータを update_dict に追加
-            update_dict["min_interval"] = min_interval
-            update_dict["max_interval"] = max_interval
+            if min_interval is None or max_interval is None:
+                await interaction.followup.send("ランダムDMを有効にする場合、最小・最大送信間隔 (分) を指定してください。", ephemeral=True); return
+            # ★ float も受け付けるようにチェック変更 ★
+            if not (isinstance(min_interval, (int, float)) and min_interval >= 0):
+                await interaction.followup.send("最小送信間隔は0以上の数値 (分) で指定してください。", ephemeral=True); return
+            if not (isinstance(max_interval, (int, float)) and max_interval >= min_interval):
+                await interaction.followup.send(f"最大送信間隔は最小送信間隔 ({min_interval}分) 以上の数値 (分) で指定してください。", ephemeral=True); return
+            if stop_start_hour is not None and not (0 <= stop_start_hour <= 23):
+                await interaction.followup.send("送信停止開始時刻は 0 から 23 の間で指定してください。", ephemeral=True); return
+            if stop_end_hour is not None and not (0 <= stop_end_hour <= 23):
+                await interaction.followup.send("送信停止終了時刻は 0 から 23 の間で指定してください。", ephemeral=True); return
+
+            # ★ 分を秒に変換し、整数に丸める (ここでは切り捨て) ★
+            min_interval_seconds = int(min_interval * 60)
+            max_interval_seconds = int(max_interval * 60)
+            # --- ここから ---
+            # 0秒にならないように最低1秒を保証する (任意)
+            if min_interval > 0 and min_interval_seconds == 0:
+                min_interval_seconds = 1
+            if max_interval > 0 and max_interval_seconds == 0:
+                max_interval_seconds = 1
+            # 最大が最小より小さくならないように再チェック (丸めにより発生する可能性)
+            if max_interval_seconds < min_interval_seconds:
+                max_interval_seconds = min_interval_seconds # 最小値に合わせる
+            # --- ここまで (任意) ---
+
+
+            update_dict["min_interval"] = min_interval_seconds
+            update_dict["max_interval"] = max_interval_seconds
             update_dict["stop_start_hour"] = stop_start_hour
             update_dict["stop_end_hour"] = stop_end_hour
-            update_dict["last_interaction"] = datetime.datetime.now().astimezone() # 設定更新時を最終インタラクションとする
-            update_dict["next_send_time"] = None # 次回送信はリセット
+            update_dict["last_interaction"] = datetime.datetime.now().astimezone()
+            update_dict["next_send_time"] = None
 
         try:
             await config_manager.update_random_dm_config_async(user_id, update_dict);
-            if enabled: await interaction.followup.send(f"ランダムDMを有効にし、設定を更新しました:\n- 間隔: {min_interval}秒 ～ {max_interval}秒\n- 停止時間: {stop_start_hour if stop_start_hour is not None else '未設定'}時 ～ {stop_end_hour if stop_end_hour is not None else '未設定'}時", ephemeral=True)
-            else: await interaction.followup.send("ランダムDMを無効にしました。", ephemeral=True)
+            if enabled:
+                 # ★ 応答メッセージでは入力された分 (float) を表示 ★
+                 await interaction.followup.send(f"ランダムDMを有効にし、設定を更新しました:\n- 間隔: {min_interval}分 ～ {max_interval}分\n  (内部処理: {min_interval_seconds}秒 ～ {max_interval_seconds}秒)\n- 停止時間: {stop_start_hour if stop_start_hour is not None else '未設定'}時 ～ {stop_end_hour if stop_end_hour is not None else '未設定'}時", ephemeral=True)
+            else:
+                 await interaction.followup.send("ランダムDMを無効にしました。", ephemeral=True)
             logger.info(f"Random DM settings updated for user {interaction.user} (enabled={enabled})")
-        except Exception as e: logger.error("Error in /config random_dm set", exc_info=e); await interaction.followup.send(f"設定の保存中にエラーが発生しました: {e}", ephemeral=True)
+        except Exception as e:
+            logger.error("Error in /config random_dm set", exc_info=e)
+            await interaction.followup.send(f"設定の保存中にエラーが発生しました: {e}", ephemeral=True)
 
     @random_dm.command(name="show", description="自身の現在のランダムDM設定を表示します")
     async def random_dm_show(self, interaction: discord.Interaction):
@@ -378,8 +477,18 @@ class ConfigCog(commands.Cog):
          try:
              user_settings = config_manager.user_data.get(user_id_str, {}).get("random_dm", {}); enabled = user_settings.get("enabled", False);
              if not enabled: await interaction.followup.send("ランダムDMは現在無効です。", ephemeral=True); return
-             min_interval = user_settings.get("min_interval", "未") # 秒表示に変更
-             max_interval = user_settings.get("max_interval", "未") # 秒表示に変更
+
+             min_interval_seconds = user_settings.get("min_interval")
+             max_interval_seconds = user_settings.get("max_interval")
+
+             # ★ 秒を分に変換 (小数点1位まで表示する例) ★
+             min_interval_minutes_str = f"{min_interval_seconds / 60:.1f}" if isinstance(min_interval_seconds, int) else "未"
+             max_interval_minutes_str = f"{max_interval_seconds / 60:.1f}" if isinstance(max_interval_seconds, int) else "未"
+             # 整数なら .0 を消す (任意)
+             if min_interval_minutes_str.endswith(".0"): min_interval_minutes_str = min_interval_minutes_str[:-2]
+             if max_interval_minutes_str.endswith(".0"): max_interval_minutes_str = max_interval_minutes_str[:-2]
+
+
              stop_start = user_settings.get("stop_start_hour", "未設定"); stop_end = user_settings.get("stop_end_hour", "未設定");
              last_interact_dt = user_settings.get("last_interaction");
              last_interact_str = last_interact_dt.strftime('%Y-%m-%d %H:%M:%S %Z') if isinstance(last_interact_dt, datetime.datetime) else "記録なし";
@@ -388,15 +497,18 @@ class ConfigCog(commands.Cog):
 
              embed = discord.Embed(title=f"{interaction.user.display_name} のランダムDM設定", color=discord.Color.orange());
              embed.add_field(name="状態", value="有効", inline=True);
-             embed.add_field(name="送信間隔", value=f"{min_interval}秒 ～ {max_interval}秒", inline=True);
+             # ★ 分単位で表示 (小数点含む可能性あり) ★
+             embed.add_field(name="送信間隔", value=f"{min_interval_minutes_str}分 ～ {max_interval_minutes_str}分", inline=True);
              embed.add_field(name="送信停止時間", value=f"{stop_start}時 ～ {stop_end}時", inline=True);
              embed.add_field(name="最終インタラクション", value=last_interact_str, inline=False);
              embed.add_field(name="次回送信予定", value=next_send_str, inline=False);
              await interaction.followup.send(embed=embed, ephemeral=True)
-         except Exception as e: logger.error("Error in /config random_dm show", exc_info=e); await interaction.followup.send(f"設定の表示中にエラーが発生しました: {e}", ephemeral=True)
+         except Exception as e:
+             logger.error("Error in /config random_dm show", exc_info=e)
+             await interaction.followup.send(f"設定の表示中にエラーが発生しました: {e}", ephemeral=True)
 
 
-    # (response_set_max_length, response_show_max_length は変更なし)
+    # --- 応答設定 (変更なし) ---
     @response.command(name="set_max_length", description="Botの応答の最大文字数を設定します")
     @app_commands.describe(length="最大文字数 (1以上)")
     async def response_set_max_length(self, interaction: discord.Interaction, length: int):
