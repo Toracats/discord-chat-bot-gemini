@@ -33,8 +33,12 @@ class WeatherMoodCog(commands.Cog):
         self.last_weather_update: Optional[datetime.datetime] = None
         self._api_key_error_logged = False
         self._cog_ready = asyncio.Event()
-        # ★ tasks.loop は __init__ 内で初期化 (start は async_init で)
-        self.auto_update_weather = tasks.loop(minutes=config_manager.DEFAULT_WEATHER_AUTO_UPDATE_INTERVAL_MINUTES)(self._auto_update_weather_task)
+
+        # ★ tasks.loop デコレータを直接メソッドに適用し、インスタンス変数に格納
+        self.auto_update_weather_task = tasks.loop(minutes=config_manager.DEFAULT_WEATHER_AUTO_UPDATE_INTERVAL_MINUTES)(self._auto_update_weather_task_body)
+        # ★ before_loop はここで適用
+        self.auto_update_weather_task.before_loop(self.before_auto_update_weather)
+
         self.bot.loop.create_task(self.async_init())
 
     async def async_init(self):
@@ -43,37 +47,40 @@ class WeatherMoodCog(commands.Cog):
         self.current_weather_location = config_manager.get_last_weather_location()
         if self.current_weather_location: logger.info(f" Initial weather location loaded: {self.current_weather_location}")
         else: logger.info(" No initial weather location found in config.")
-        self.update_auto_update_task_status() # 設定に基づいてタスクを開始/停止/間隔設定
+        self.update_auto_update_task_status()
         self._cog_ready.set(); logger.info("WeatherMoodCog initialized and ready.")
 
     async def cog_unload(self):
-        self.auto_update_weather.cancel()
+        # ★ 停止するタスク名を修正
+        self.auto_update_weather_task.cancel()
         await self.http_session.close()
         logger.info("WeatherMoodCog unloaded and resources released.")
 
     def update_auto_update_task_status(self):
         enabled = config_manager.get_weather_auto_update_enabled()
         interval = config_manager.get_weather_auto_update_interval()
-        # ★ self.auto_update_weather を直接参照
-        current_interval = self.auto_update_weather.minutes # 現在のループ間隔を取得
-        is_running = self.auto_update_weather.is_running()
+        # ★ self.auto_update_weather_task を参照
+        current_interval = self.auto_update_weather_task.minutes
+        is_running = self.auto_update_weather_task.is_running()
 
         if enabled:
             if not is_running:
                 logger.info(f"Starting auto weather update task with interval {interval} minutes.")
-                self.auto_update_weather.change_interval(minutes=interval) # 間隔を設定
-                self.auto_update_weather.start() # タスク開始
-            elif current_interval != interval: # 実行中だが間隔が違う場合
+                self.auto_update_weather_task.change_interval(minutes=interval)
+                self.auto_update_weather_task.start()
+            elif current_interval != interval:
                  logger.info(f"Restarting auto weather update task with new interval {interval} minutes (was {current_interval}).")
-                 self.auto_update_weather.restart(minutes=interval) # 新しい間隔で再起動
-            # else: # 実行中で間隔も同じ場合は何もしない
-            #      logger.debug(f"Auto weather update task already running interval {interval} min.")
-        else: # 無効の場合
+                 # ★ restart() の引数に注意 (直接 minutes を渡せない可能性がある)
+                 self.auto_update_weather_task.change_interval(minutes=interval)
+                 if not self.auto_update_weather_task.is_running(): # 停止していた場合はstart
+                      self.auto_update_weather_task.start()
+                 # else: # 既に実行中なら change_interval だけで良いはず
+            # else: logger.debug(f"Auto weather task running interval {interval} min.")
+        else:
             if is_running:
-                logger.info("Stopping auto weather update task as it is disabled.")
-                self.auto_update_weather.cancel() # タスク停止
-            # else: # 停止中で無効なら何もしない
-            #      logger.debug("Auto weather update task is disabled and not running.")
+                logger.info("Stopping auto weather update task as disabled.")
+                self.auto_update_weather_task.cancel()
+            # else: logger.debug("Auto weather task disabled and not running.")
 
     async def get_weather_data(self, location: str) -> Optional[Dict[str, Any]]:
         api_key = config_manager.get_weather_api_key()
@@ -149,24 +156,25 @@ class WeatherMoodCog(commands.Cog):
     # --- 自動更新タスク ---
     # loopデコレータをメソッド定義の直前に置く
     # @tasks.loop(minutes=config_manager.get_weather_auto_update_interval()) # ここで呼ぶと初期化前に呼ばれる
-    async def _auto_update_weather_task(self): # ★ ループ本体を別メソッドに
+    async def _auto_update_weather_task_body(self):
         """自動更新ループの本体"""
-        await self._cog_ready.wait() # Cog準備完了待機
+        await self._cog_ready.wait()
         location_to_update = config_manager.get_last_weather_location()
         if location_to_update:
              logger.info(f"[AutoUpdate] Updating weather for {location_to_update}...")
              success = await self.update_mood_based_on_location(location_to_update)
              if success: logger.info(f"[AutoUpdate] Successfully updated weather for {location_to_update}.")
              else: logger.warning(f"[AutoUpdate] Failed to update weather for {location_to_update}.")
-             # 自動更新成功時は設定を保存しない（last_locationの変更のみのため）
         else: logger.debug("[AutoUpdate] Skipping auto weather update, location not set.")
 
-    @_auto_update_weather_task.before_loop # ★ before_loop を本体メソッドに適用
+    # ★ before_loop デコレータは __init__ で適用済なので不要
+    # @_auto_update_weather_task.before_loop
     async def before_auto_update_weather(self):
+        """ループ開始前に実行される処理"""
         await self.bot.wait_until_ready()
         await self._cog_ready.wait()
         logger.info("Auto weather update loop is ready to start.")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(WeatherMoodCog(bot))
-    # ロード完了ログは Cog の async_init 内に移動
+    # logger.info("WeatherMoodCog setup complete.") # ログは __init__ / async_init に移動
