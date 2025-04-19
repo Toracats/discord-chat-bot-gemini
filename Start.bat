@@ -10,6 +10,6 @@ call "%BAT_DIR%..\venv\Scripts\activate.bat"
 cd /d "%BAT_DIR%\gui"
 
 :: Pythonスクリプトを実行
-python main_gui.py
+flet run main_gui.py
 
 pause
