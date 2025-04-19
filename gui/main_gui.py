@@ -71,37 +71,37 @@ async def main(page: ft.Page):
 
     # --- コントロール参照 ---
     bot_name_background = ft.Text("", size=130, font_family="Bebas Neue", weight=ft.FontWeight.BOLD,
-        # ★ ft.colors.with_opacity -> ft.colors.with_opacity (小文字c), ft.Colors.WHITE (大文字C) ★
-        color=ft.colors.with_opacity(0.08, ft.Colors.WHITE),
+        # ★ ft.Colors.with_opacity -> ft.Colors.with_opacity (小文字c), ft.Colors.WHITE (大文字C) ★
+        color=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
         selectable=False, no_wrap=True, rotate=ft.transform.Rotate(angle=math.pi / 2))
     bot_icon_image = ft.Image(src="assets/default_avatar.png", width=200, height=200, fit=ft.ImageFit.COVER, border_radius=ft.border_radius.all(15))
     bot_icon_container = ft.Container(content=bot_icon_image, width=200, height=200, border_radius=ft.border_radius.all(15), clip_behavior=ft.ClipBehavior.ANTI_ALIAS, tooltip="クリックしてアイコンを変更", ink=True)
-    bot_name_display_edit = ft.TextField(label="NAME", value="", text_style=ft.TextStyle(font_family="Bebas Neue", size=28), border=ft.InputBorder.NONE, read_only=True, tooltip="クリックして編集")
-    bot_status_text = ft.Text("INITIALIZING...", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE)
+    bot_name_display_edit = ft.TextField(label="NAME", value="",label_style=ft.TextStyle(font_family="Bebas Neue", size=64), text_style=ft.TextStyle(font_family="Bebas Neue", size=48), border=ft.InputBorder.NONE, read_only=True, tooltip="クリックして編集")
+    bot_status_text = ft.Text("INITIALIZING...", size=48, weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE)
     bot_status_switch = ft.Switch(value=False, disabled=True, tooltip="Botを起動/停止")
-    weather_text = ft.Text("Weather: ---", font_family="Bebas Neue", size=16)
-    dm_next_time_text = ft.Text("Next DM: ---", size=14)
-    dm_target_text = ft.Text("Target: ---", size=14)
+    weather_text = ft.Text("Weather: ---", font_family="Bebas Neue", size=48)
+    dm_next_time_text = ft.Text("Next DM: ---", font_family="Bebas Neue", size=48)
+    dm_target_text = ft.Text("Target: ---", font_family="Bebas Neue", size=48)
     weather_auto_update_switch = ft.Switch(label="天気自動更新を有効にする", value=False)
     weather_interval_field = ft.TextField(label="自動更新間隔 (分)", value="", width=150, keyboard_type=ft.KeyboardType.NUMBER, input_filter=ft.InputFilter(allow=True, regex_string=r"[0-9]+"), tooltip="最低10分")
     settings_view_switcher = ft.AnimatedSwitcher(content=ft.Column([ft.ProgressRing(), ft.Text("設定を読み込み中...")]), transition=ft.AnimatedSwitcherTransition.FADE, duration=300, reverse_duration=100, expand=True)
     latest_log_text = ft.Text("ログ: ---", size=12, opacity=0.7, no_wrap=True)
     log_output_list = ft.ListView(expand=True, spacing=5, auto_scroll=True, divider_thickness=1)
     log_detail_container = ft.Container(content=log_output_list, padding=ft.padding.only(top=10, bottom=10, left=15, right=15),
-        # ★ ft.colors.with_opacity -> ft.colors.with_opacity, ft.Colors.WHITE ★
-        border=ft.border.all(1, ft.colors.with_opacity(0.2, ft.Colors.WHITE)),
+        # ★ ft.Colors.with_opacity -> ft.Colors.with_opacity, ft.Colors.WHITE ★
+        border=ft.border.all(1, ft.Colors.with_opacity(0.2, ft.Colors.WHITE)),
         border_radius=ft.border_radius.all(5), height=200, visible=False, animate_opacity=300, animate_size=300)
     log_area = ft.Container(ft.Column([ft.Container(content=latest_log_text, ink=True, tooltip="クリックで詳細ログを展開/格納", on_click=lambda e: toggle_log_detail(e)), log_detail_container], spacing=5),
         padding=ft.padding.symmetric(horizontal=20, vertical=5),
-        # ★ ft.colors.with_opacity -> ft.colors.with_opacity, ft.Colors.WHITE ★
-        border=ft.border.only(top=ft.border.BorderSide(1, ft.colors.with_opacity(0.1, ft.Colors.WHITE))))
+        # ★ ft.Colors.with_opacity -> ft.Colors.with_opacity, ft.Colors.WHITE ★
+        border=ft.border.only(top=ft.border.BorderSide(1, ft.Colors.with_opacity(0.1, ft.Colors.WHITE))))
     def open_menu(e): menu_sheet.open = True; page.update()
-    # ★ ft.icons -> ft.Icons (大文字I) ★
-    menu_button = ft.IconButton(ft.icons.MENU_ROUNDED, tooltip="設定メニュー", on_click=open_menu)
+    # ★ ft.Icons -> ft.Icons (大文字I) ★
+    menu_button = ft.IconButton(ft.Icons.MENU_ROUNDED, tooltip="設定メニュー", on_click=open_menu)
     status_snackbar = ft.SnackBar(content=ft.Text(""), open=False)
     loading_overlay = ft.Container(content=ft.Column([ft.ProgressRing(), ft.Text("読み込み中...", size=16)], horizontal_alignment=ft.CrossAxisAlignment.CENTER), alignment=ft.alignment.center,
-        # ★ ft.colors.with_opacity -> ft.colors.with_opacity, ft.Colors.BLACK ★
-        bgcolor=ft.colors.with_opacity(0.7, ft.Colors.BLACK), visible=True, expand=True)
+        # ★ ft.Colors.with_opacity -> ft.Colors.with_opacity, ft.Colors.BLACK ★
+        bgcolor=ft.Colors.with_opacity(0.7, ft.Colors.BLACK), visible=True, expand=True)
 
     # --- PubSub リスナー (ログ用) ---
     def on_log_message_received(log_entry: str):
@@ -493,14 +493,14 @@ async def main(page: ft.Page):
         settings_view_switcher.content = new_content
         menu_sheet.open = False
         page.update()
-    # ★ ft.icons -> ft.Icons ★
+    # ★ ft.Icons -> ft.Icons ★
     menu_items = [
-        ft.ListTile(title=ft.Text("メイン情報"), leading=ft.Icon(ft.icons.INFO_OUTLINE_ROUNDED), on_click=lambda _: change_view("main")),
-        ft.ListTile(title=ft.Text("基本設定 (APIキー等)"), leading=ft.Icon(ft.icons.KEY_ROUNDED), on_click=lambda _: change_view("basic")),
+        ft.ListTile(title=ft.Text("メイン情報"), leading=ft.Icon(ft.Icons.INFO_OUTLINE_ROUNDED), on_click=lambda _: change_view("main")),
+        ft.ListTile(title=ft.Text("基本設定 (APIキー等)"), leading=ft.Icon(ft.Icons.KEY_ROUNDED), on_click=lambda _: change_view("basic")),
         ft.Divider(height=1),
-        ft.ListTile(title=ft.Text("Gemini 設定"), leading=ft.Icon(ft.icons.SETTINGS_ROUNDED), on_click=lambda _: change_view("gemini")),
-        ft.ListTile(title=ft.Text("天気 設定"), leading=ft.Icon(ft.icons.SUNNY), on_click=lambda _: change_view("weather")),
-        ft.ListTile(title=ft.Text("プロンプト設定"), leading=ft.Icon(ft.icons.EDIT_NOTE_ROUNDED), on_click=lambda _: change_view("prompt")),
+        ft.ListTile(title=ft.Text("Gemini 設定"), leading=ft.Icon(ft.Icons.SETTINGS_ROUNDED), on_click=lambda _: change_view("gemini")),
+        ft.ListTile(title=ft.Text("天気 設定"), leading=ft.Icon(ft.Icons.SUNNY), on_click=lambda _: change_view("weather")),
+        ft.ListTile(title=ft.Text("プロンプト設定"), leading=ft.Icon(ft.Icons.EDIT_NOTE_ROUNDED), on_click=lambda _: change_view("prompt")),
         # Add other menu items...
     ]
     menu_sheet = ft.BottomSheet(
@@ -558,9 +558,24 @@ async def main(page: ft.Page):
     main_info_column = ft.Column(
         [
             bot_name_display_edit,
-            ft.Row([ft.Text("Bot Status:", font_family="Bebas Neue"), bot_status_text, bot_status_switch], spacing=10, alignment=ft.MainAxisAlignment.START, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            weather_text, dm_next_time_text, dm_target_text,
-        ], spacing=15,
+            ft.Row(
+                [
+                    ft.Text("Bot Status:", font_family="Bebas Neue", size=48), # ラベル
+                    ft.Container(
+                        content=bot_status_text,
+                        margin=ft.margin.only(bottom=8)   # マージンで調整する場合 (例: 3ピクセル下にずらす)
+                    ),
+                    bot_status_switch
+                ],
+                spacing=10,
+                alignment=ft.MainAxisAlignment.START,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER # ベースライン揃え (推奨)
+            ),
+            weather_text,
+            dm_next_time_text,
+            dm_target_text,
+        ],
+        spacing=15,
     )
     settings_view_switcher.content = main_info_column # 初期表示
 
