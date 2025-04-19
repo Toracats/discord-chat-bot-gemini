@@ -1,6 +1,5 @@
-# gui/main_gui.py (Pillowで平行四辺形アイコン加工版)
-
 import flet as ft
+from flet import canvas # canvas は不要になったかも
 import sys
 import os
 import logging
@@ -12,26 +11,19 @@ import asyncio
 import datetime
 import math
 import base64
-from io import BytesIO # Pillowでのバイトデータ処理用
+from io import BytesIO
 
-# ★ Pillow をインポート ★
 try:
     from PIL import Image, ImageDraw, ImageOps
 except ImportError:
     print("Pillow library not found. Please install it using: pip install Pillow")
-    Image = None
-    ImageDraw = None
-    ImageOps = None
-
+    Image = None; ImageDraw = None; ImageOps = None
 
 logger = logging.getLogger(__name__)
 # logger.setLevel(logging.DEBUG)
 
-try:
-    from pubsub import pub
-except ImportError:
-    print("Error: PyPubSub library not found. pip install pypubsub")
-    pub = None
+try: from pubsub import pub
+except ImportError: print("Error: PyPubSub library not found. pip install pypubsub"); pub = None
 
 # --- プロジェクトルート ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -48,15 +40,10 @@ try:
     import aiofiles
     import aiofiles.os
     import discord
-except ImportError as e:
-    print(f"Error importing modules: {e}")
-    sys.exit(1)
-except Exception as general_e:
-     print(f"Unexpected error during import: {general_e}")
-     sys.exit(1)
+except ImportError as e: print(f"Error importing modules: {e}"); sys.exit(1)
+except Exception as general_e: print(f"Unexpected error during import: {general_e}"); sys.exit(1)
 
 # --- ロギング設定 ---
-# (変更なし)
 try:
     LOG_FILE_PATH = config_manager.LOG_FILE; LOG_FORMAT = '%(asctime)s:%(levelname)s:%(name)s: %(message)s'; LOG_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'; root_logger = logging.getLogger();
     if not root_logger.hasHandlers():
@@ -70,38 +57,33 @@ except Exception as e_log_init: print(f"CRITICAL ERROR during logging setup: {e_
 
 MAX_LOG_LINES = 500
 
-# --- ★ Pillow 画像加工関数 ★ ---
-def create_parallelogram_avatar(image_bytes: bytes, width: int, height: int, skew_offset: int) -> Optional[str]:
+# --- Pillow 画像加工関数 (縦長対応) ---
+def create_parallelogram_avatar(image_bytes: bytes, target_width: int, target_height: int, skew_offset: int) -> Optional[str]:
     """Pillowを使って画像を平行四辺形に切り抜き、Base64 PNG文字列を返す"""
-    if not Image or not ImageDraw or not ImageOps:
-        logger.error("Pillow library is not available.")
+    if not Image or not ImageDraw or not ImageOps: logger.error("Pillow library not available."); return None
+    # ★ target_height が 0 以下の場合のエラーハンドリングを追加
+    if target_height <= 0:
+        logger.warning(f"Invalid target_height for image processing: {target_height}")
         return None
     try:
-        # 元画像を読み込み、指定サイズにリサイズ（アスペクト比維持、中央クロップ）
         img = Image.open(BytesIO(image_bytes)).convert("RGBA")
-        img = ImageOps.fit(img, (width, height), Image.Resampling.LANCZOS) # 中央クロップ＆リサイズ
+        # ★ 目標の幅・高さに合わせて中央クロップ＆リサイズ ★
+        img = ImageOps.fit(img, (target_width, target_height), Image.Resampling.LANCZOS)
 
-        # 平行四辺形のマスクを作成
-        mask = Image.new('L', (width, height), 0) # 黒背景のマスク
+        # マスク作成 (リサイズ後の画像サイズに合わせる)
+        mask = Image.new('L', (target_width, target_height), 0)
         draw = ImageDraw.Draw(mask)
-        # 平行四辺形の頂点リスト（マスク用なので座標系は0,0から）
+        # 平行四辺形の頂点 (マスク用座標系)
         polygon = [
-            (skew_offset, 0),          # 左上 (ずらす)
-            (width, 0),                # 右上 (ずらさない)
-            (width - skew_offset, height), # 右下 (ずらす)
-            (0, height)                # 左下 (ずらさない)
+            (skew_offset, 0),
+            (target_width, 0),
+            (target_width - skew_offset, target_height),
+            (0, target_height)
         ]
-        draw.polygon(polygon, fill=255) # 白で平行四辺形を描画
+        draw.polygon(polygon, fill=255)
 
-        # 元画像にマスクを適用
-        img.putalpha(mask)
+        img.putalpha(mask) # マスク適用
 
-        # # 傾きを補正（見た目上、傾いていない画像にする場合 - 必要なら）
-        # # これは少し複雑なアフィン変換が必要になる
-        # matrix = (1, skew_offset / height, 0, 0, 1, 0)
-        # img = img.transform((width, height), Image.AFFINE, matrix, Image.BILINEAR)
-
-        # Base64エンコードされたPNG文字列を返す
         buffered = BytesIO()
         img.save(buffered, format="PNG")
         img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
@@ -113,7 +95,12 @@ def create_parallelogram_avatar(image_bytes: bytes, width: int, height: int, ske
 
 # --- Flet アプリケーション main 関数 ---
 async def main(page: ft.Page):
-    page.title = f"{config_manager.APP_NAME} Controller"; page.window_width = 900; page.window_height = 650
+    # ★ ウィンドウサイズを4:3に設定 ★
+    page.window_width = 800 # 例
+    page.window_height = 600 # 例
+    page.window_min_width = 800 # 最小幅
+    page.window_min_height = 600 # 最小高さ
+    page.title = f"{config_manager.APP_NAME} Controller"
     page.vertical_alignment = ft.MainAxisAlignment.START; page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
     page.padding = 0
     page.fonts = {"Noto Sans JP": "fonts/NotoSansJP-Regular.ttf", "Bebas Neue": "fonts/BebasNeue-Regular.ttf"}
@@ -123,60 +110,77 @@ async def main(page: ft.Page):
     is_in_critical_error_state = threading.Event(); is_in_critical_error_state.clear()
 
     # --- 定数定義 ---
-    ICON_WIDTH = 200
-    ICON_HEIGHT = 200
+    ICON_AREA_WIDTH = 300 # 左エリアの幅
     SKEW_OFFSET = 40 # 平行四辺形の傾き
+
+    # --- グローバル変数 (アイコンの元データ保持用) ---
+    current_icon_bytes: Optional[bytes] = None
 
     # --- コントロール参照 ---
     # 左エリア
-    bot_name_background = ft.Text("", size=130, font_family="Bebas Neue", weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.08, ft.Colors.WHITE), selectable=False, no_wrap=True, rotate=ft.transform.Rotate(angle=math.pi / 2))
-    # ★ アイコン表示を通常の ft.Image に変更 ★
-    bot_icon_image = ft.Image(
-        # src_base64 は初期ロード/更新時に設定
-        width=ICON_WIDTH, # 平行四辺形の幅ではなく、元の画像の幅
-        height=ICON_HEIGHT,
-        fit=ft.ImageFit.CONTAIN, # CONTAIN の方が全体が見えるかも
+    bot_name_background = ft.Text( # rotateプロパティは変更なし
+        "", size=140, font_family="Bebas Neue", weight=ft.FontWeight.BOLD,
+        # ★ 色の透明度を少し上げる (0.08 -> 0.15)
+        color=ft.Colors.with_opacity(0.15, ft.Colors.WHITE), selectable=False, no_wrap=True,
+        rotate=ft.transform.Rotate(angle=math.pi / 2, alignment=ft.alignment.top_left)
     )
-    # ★ クリック用の Container (形状は気にしない) ★
+    bot_icon_image = ft.Image( # (変更なし)
+        src=None, width=ICON_AREA_WIDTH, # height は on_window_resize で動的に設定
+        fit=ft.ImageFit.COVER, # ★ CONTAIN から COVER に変更してエリア全体を覆うようにする
+    )
+    # ★ アイコンコンテナの背景を透明に ★
     bot_icon_container = ft.Container(
         content=bot_icon_image,
-        width=ICON_WIDTH, # 見た目のサイズ
-        height=ICON_HEIGHT,
+        width=ICON_AREA_WIDTH,
+        expand=True, # ★ Stack内で高さを広げる
         tooltip="クリックしてアイコンを変更",
         on_click=lambda e: handle_icon_container_click(e),
-        # ink=True # なくてもOK
+        bgcolor=ft.colors.TRANSPARENT,
+        alignment=ft.alignment.center # 画像を中央に配置 (COVERなので効果は薄いが念のため)
+    )
+    # ★ 背景文字用コンテナ (左上に配置、Stack内で最初に記述するため) ★
+    bot_name_background_container = ft.Container(
+        content=bot_name_background,
+        top=0, left=70,
+        alignment=ft.alignment.top_left, # コンテナ内の配置
+        # expand=True, # Stack内では expand は直接効かないことが多い
     )
 
     # 右エリア (メイン情報)
     bot_name_display_edit = ft.TextField(label="NAME", value="", label_style=ft.TextStyle(font_family="Bebas Neue", size=64), text_style=ft.TextStyle(font_family="Bebas Neue", size=48), border=ft.InputBorder.NONE, read_only=True, tooltip="クリックして編集")
     bot_status_label = ft.Text("Bot Status:", font_family="Bebas Neue", size=48)
-    bot_status_text = ft.Text("INITIALIZING...", font_family="Bebas Neue", size=48, weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE)
+    bot_status_text = ft.Text("INITIALIZING...", size=48, weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE, font_family="Bebas Neue")
     bot_status_switch = ft.Switch(value=False, disabled=True, tooltip="Botを起動/停止")
     weather_text = ft.Text("Weather: ---", font_family="Bebas Neue", size=48)
     dm_next_time_text = ft.Text("Next DM: ---", font_family="Bebas Neue", size=48)
     dm_target_text = ft.Text("Target: ---", font_family="Bebas Neue", size=48)
 
-    # 天気設定ウィジェット
+    # (天気設定ウィジェット - 変更なし)
     weather_auto_update_switch = ft.Switch(label="天気自動更新を有効にする", value=False)
     weather_interval_field = ft.TextField(label="自動更新間隔 (分)", value="", width=150, keyboard_type=ft.KeyboardType.NUMBER, input_filter=ft.InputFilter(allow=True, regex_string=r"[0-9]+"), tooltip="最低10分")
 
-    # 右エリア (設定画面用)
-    settings_view_switcher = ft.AnimatedSwitcher(content=ft.Column([ft.ProgressRing(), ft.Text("設定を読み込み中...")]), transition=ft.AnimatedSwitcherTransition.FADE, duration=300, reverse_duration=100, expand=True)
-
-    # ログエリア
+    # ★ 右エリア設定用Switcher (expand=True を追加) ★
+    settings_view_switcher = ft.AnimatedSwitcher(
+        content=ft.Column([ft.ProgressRing(), ft.Text("設定を読み込み中...")]),
+        transition=ft.AnimatedSwitcherTransition.FADE,
+        duration=300,
+        reverse_duration=100,
+        expand=True # ★ 利用可能なスペースを埋めるようにする
+    )
+    # (ログエリア - 変更なし)
     latest_log_text = ft.Text("ログ: ---", size=12, opacity=0.7, no_wrap=True)
     log_output_list = ft.ListView(expand=True, spacing=5, auto_scroll=True, divider_thickness=1)
     log_detail_container = ft.Container(content=log_output_list, padding=ft.padding.only(top=10, bottom=10, left=15, right=15), border=ft.border.all(1, ft.Colors.with_opacity(0.2, ft.Colors.WHITE)), border_radius=ft.border_radius.all(5), height=200, visible=False, animate_opacity=300, animate_size=300)
     log_area = ft.Container(ft.Column([ft.Container(content=latest_log_text, ink=True, tooltip="クリックで詳細ログを展開/格納", on_click=lambda e: toggle_log_detail(e)), log_detail_container], spacing=5), padding=ft.padding.symmetric(horizontal=20, vertical=5), border=ft.border.only(top=ft.border.BorderSide(1, ft.Colors.with_opacity(0.1, ft.Colors.WHITE))))
 
-    # 右端メニュー
+    # (右端メニューボタン - 変更なし)
     def open_menu(e): menu_sheet.open = True; page.update()
     menu_button = ft.IconButton(ft.Icons.MENU_ROUNDED, tooltip="設定メニュー", on_click=open_menu)
 
-    # Snackbar
+    # (Snackbar - 変更なし)
     status_snackbar = ft.SnackBar(content=ft.Text(""), open=False)
 
-    # ローディングオーバーレイ
+    # (ローディングオーバーレイ - 変更なし)
     loading_overlay = ft.Container(content=ft.Column([ft.ProgressRing(), ft.Text("読み込み中...", size=16)], horizontal_alignment=ft.CrossAxisAlignment.CENTER), alignment=ft.alignment.center, bgcolor=ft.Colors.with_opacity(0.7, ft.Colors.BLACK), visible=True, expand=True)
 
     # --- PubSub リスナー (ログ用) ---
@@ -221,8 +225,8 @@ async def main(page: ft.Page):
 
     # --- PubSubの購読設定 ---
     # (変更なし)
-    if pub: 
-        try: pub.subscribe(on_log_message_received, 'log_message'); logger.info("Subscribed to 'log_message'."); pub.subscribe(on_bot_status_update, 'bot_status_update'); logger.info("Subscribed to 'bot_status_update'."); 
+    if pub:
+        try: pub.subscribe(on_log_message_received, 'log_message'); logger.info("Subscribed to 'log_message'."); pub.subscribe(on_bot_status_update, 'bot_status_update'); logger.info("Subscribed to 'bot_status_update'.");
         except Exception as e_pubsub_sub: logger.error("Failed pubsub subscribe", exc_info=e_pubsub_sub)
     else: logger.warning("PubSub not available.")
 
@@ -234,99 +238,138 @@ async def main(page: ft.Page):
 
     # Bot名編集関連
     # (変更なし)
-    def handle_bot_name_click(e): bot_name_display_edit.read_only = False; bot_name_display_edit.border = ft.InputBorder.UNDERLINE; bot_name_display_edit.update(); bot_name_display_edit.focus()
+    # Bot名編集関連
+    def handle_bot_name_click(e):
+        # ★ Bot 動作中か確認 ★
+        if bot_core.is_bot_running():
+            bot_name_display_edit.read_only = False
+            bot_name_display_edit.border = ft.InputBorder.UNDERLINE
+            bot_name_display_edit.update()
+            bot_name_display_edit.focus()
+        else:
+            show_snackbar("Botが停止中のため名前を変更できません。", "orange")
+
     async def handle_bot_name_submit(e):
-        new_name = bot_name_display_edit.value.strip(); bot_name_display_edit.read_only = True; bot_name_display_edit.border = ft.InputBorder.NONE; bot_name_display_edit.update(); current_name = "";
-        if hasattr(bot_core, 'bot') and bot_core.bot and bot_core.bot.user: current_name = bot_core.bot.user.name
-        if not new_name or new_name == current_name: logger.info("Bot name not changed."); bot_name_display_edit.value = current_name; bot_name_display_edit.update(); return
-        confirm_dialog_name = ft.AlertDialog(modal=True, title=ft.Text("Bot名変更の確認"), content=ft.Text(f"Bot名を「{new_name}」に変更しますか？\n(Discordのレート制限にご注意ください)"), actions=[ft.TextButton("はい", on_click=lambda _: page.run_task(close_dialog_and_change_name(new_name, confirm_dialog_name))), ft.TextButton("いいえ", on_click=lambda _: close_dialog(confirm_dialog_name))], actions_alignment=ft.MainAxisAlignment.END); page.dialog = confirm_dialog_name; confirm_dialog_name.open = True; page.update()
-    async def close_dialog_and_change_name(new_name, dialog): dialog.open = False; page.update(); await change_bot_profile(username=new_name)
+        # (関数の中身は変更なし)
+        new_name = bot_name_display_edit.value.strip()
+        bot_name_display_edit.read_only = True
+        bot_name_display_edit.border = ft.InputBorder.NONE
+        bot_name_display_edit.update()
+        current_name = ""
+        if hasattr(bot_core, 'bot') and bot_core.bot and bot_core.bot.user:
+            current_name = bot_core.bot.user.name
+        if not new_name or new_name == current_name:
+            logger.info("Bot name not changed.")
+            bot_name_display_edit.value = current_name # Revert if unchanged
+            bot_name_display_edit.update()
+            return
+        # Confirmation Dialog (変更なし)
+        confirm_dialog_name = ft.AlertDialog(
+            modal=True, title=ft.Text("Bot名変更の確認"), content=ft.Text(f"Bot名を「{new_name}」に変更しますか？\n(Discordのレート制限にご注意ください)"),
+            actions=[ft.TextButton("はい", on_click=lambda _: page.run_task(close_dialog_and_change_name(new_name, confirm_dialog_name))), ft.TextButton("いいえ", on_click=lambda _: close_dialog(confirm_dialog_name))],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        page.dialog = confirm_dialog_name
+        confirm_dialog_name.open = True
+        page.update()
+
+    # ★ on_blur 用の同期ハンドラを定義 ★
+    def handle_bot_name_blur(e):
+        logger.debug("Bot name field blurred. Running submit task.")
+        # ★ page.run_task の呼び出し方を修正 ★
+        # page.run_task にはコルーチン関数と、その引数を渡す
+        page.run_task(handle_bot_name_submit, e) # 第1引数に関数、第2引数以降にその関数の引数
+
+    # (close_dialog, close_dialog_and_change_name は変更なし)
     def close_dialog(dialog):
         dialog.open = False; current_name = "";
         if hasattr(bot_core, 'bot') and bot_core.bot and bot_core.bot.user: current_name = bot_core.bot.user.name
         bot_name_display_edit.value = current_name; bot_name_display_edit.read_only = True; bot_name_display_edit.border = ft.InputBorder.NONE; page.update()
-    bot_name_display_edit.on_submit = handle_bot_name_submit; bot_name_display_edit.on_blur = lambda e: page.run_task(handle_bot_name_submit(e)); bot_name_display_edit.on_click = handle_bot_name_click
+    async def close_dialog_and_change_name(new_name, dialog):
+        dialog.open = False; page.update(); await change_bot_profile(username=new_name)
+
+    bot_name_display_edit.on_submit = handle_bot_name_submit # on_submit は async OK
+    bot_name_display_edit.on_blur = handle_bot_name_blur     # ★ 同期ハンドラを設定 ★
+    bot_name_display_edit.on_click = handle_bot_name_click
 
     # Botアイコン変更関連
     async def on_file_picker_result(e: ft.FilePickerResultEvent): await handle_icon_picked(e)
     file_picker = ft.FilePicker(on_result=on_file_picker_result); page.overlay.append(file_picker)
-    # ★ Container の on_click でハンドラを設定 ★
     def handle_icon_container_click(e):
-        if bot_core.is_bot_running(): logger.debug("Icon container clicked..."); file_picker.pick_files(dialog_title="Botアイコンを選択", allowed_extensions=["png", "jpg", "jpeg", "gif"], allow_multiple=False)
-        else: show_snackbar("Botが停止中のためアイコンを変更できません。", "orange")
-    bot_icon_container.on_click = handle_icon_container_click # ★ ハンドラ設定
+        # ★ Bot 動作中か確認 (既存の処理と同じ) ★
+        if bot_core.is_bot_running():
+             logger.debug("Icon container clicked, opening file picker...")
+             file_picker.pick_files(
+                 dialog_title="Botアイコンを選択",
+                 allowed_extensions=["png", "jpg", "jpeg", "gif"],
+                 allow_multiple=False
+             )
+        else:
+             show_snackbar("Botが停止中のためアイコンを変更できません。", "orange")
+    # bot_icon_container.on_click = handle_icon_container_click # ★ レイアウト構築時に設定済
 
     async def handle_icon_picked(e: ft.FilePickerResultEvent):
+        nonlocal current_icon_bytes # ★ グローバル変数を使うことを宣言
         if e.files and len(e.files) > 0:
             selected_file = e.files[0]; image_path = selected_file.path; logger.info(f"Icon file selected: {image_path}")
-            # ★ 元画像データを読み込む ★
             try:
                 async with aiofiles.open(image_path, "rb") as f:
                     original_avatar_bytes = await f.read()
-            except Exception as img_read_e:
-                 logger.error(f"Error reading selected icon file: {image_path}", exc_info=img_read_e)
-                 show_snackbar(f"アイコンファイルの読み込みエラー: {img_read_e}", "red")
-                 return
+            except Exception as img_read_e: logger.error(f"Error reading icon file: {image_path}", exc_info=img_read_e); show_snackbar(f"アイコン読込エラー: {img_read_e}", "red"); return
 
-            # ★ Pillowで加工して表示用データを作成 ★
-            processed_avatar_b64 = create_parallelogram_avatar(original_avatar_bytes, ICON_WIDTH, ICON_HEIGHT, SKEW_OFFSET)
+            # Pillowで加工して表示用データを作成 (高さは現在のページ高さを目安にする)
+            current_page_height = page.height or page.window_height # 現在の高さを取得
+            # ★ current_page_height が None や 0 にならないように安全策
+            effective_height = int(current_page_height) if current_page_height and current_page_height > 0 else int(page.window_height)
+            processed_avatar_b64 = create_parallelogram_avatar(original_avatar_bytes, ICON_AREA_WIDTH, effective_height, SKEW_OFFSET)
 
             confirm_dialog_icon = ft.AlertDialog(modal=True, title=ft.Text("アイコン変更の確認"),
-                content=ft.Column([
-                    ft.Text(f"この画像でアイコンを変更しますか？\n(レート制限注意)"),
-                    # ★ 加工後のプレビューを表示 ★
-                    ft.Image(src_base64=processed_avatar_b64 if processed_avatar_b64 else None, width=100, height=100, fit=ft.ImageFit.CONTAIN)
-                ], tight=True),
-                actions=[
-                    # ★ 元画像のバイトデータを渡すように変更 ★
-                    ft.TextButton("はい", on_click=lambda _: page.run_task(close_dialog_and_change_icon(original_avatar_bytes, confirm_dialog_icon))),
-                    ft.TextButton("いいえ", on_click=lambda _: close_dialog(confirm_dialog_icon)),
-                ],
+                content=ft.Column([ft.Text(f"この画像でアイコンを変更しますか？\n(レート制限注意)"), ft.Image(src_base64=processed_avatar_b64 if processed_avatar_b64 else None, height=100, width=100, fit=ft.ImageFit.CONTAIN)], tight=True),
+                actions=[ft.TextButton("はい", on_click=lambda _: page.run_task(close_dialog_and_change_icon(original_avatar_bytes, confirm_dialog_icon))), ft.TextButton("いいえ", on_click=lambda _: close_dialog(confirm_dialog_icon))],
                 actions_alignment=ft.MainAxisAlignment.END,
             )
-            page.dialog = confirm_dialog_icon
-            confirm_dialog_icon.open = True
-            page.update()
+            page.dialog = confirm_dialog_icon; confirm_dialog_icon.open = True; page.update()
         else: logger.info("Icon selection cancelled.")
 
-    # ★ 引数を avatar_bytes に変更 ★
     async def close_dialog_and_change_icon(avatar_bytes: bytes, dialog):
-        dialog.open = False
-        page.update()
-        # ★ change_bot_profile に元画像のバイトデータを渡す ★
+        nonlocal current_icon_bytes
+        dialog.open = False; page.update()
+        current_icon_bytes = avatar_bytes # ★ 変更適用前に元データを保持
         await change_bot_profile(avatar=avatar_bytes)
 
-    # ★ アイコン更新処理を Pillow 加工前提に修正 ★
     async def change_bot_profile(username: Optional[str] = None, avatar: Optional[bytes] = None):
         if not bot_core.is_bot_running() or not bot_core.bot: show_snackbar("Botが起動していないため変更できません。", "orange"); return
         show_snackbar("プロフィールを変更中...", "blue"); page.update()
         try:
-            # ★ Discord APIには元画像を送信 ★
             await bot_core.bot.edit_profile(username=username, avatar=avatar)
             logger.info(f"Bot profile updated (username={username is not None}, avatar={avatar is not None})."); show_snackbar("プロフィールを変更しました。", "green");
             if username:
                 bot_name_display_edit.value = username
-                # 背景文字更新 (Textウィジェットを直接更新)
-                if isinstance(bot_name_background, ft.Text): # RotateではなくText自体
-                    bot_name_background.value = username
-                    bot_name_background.update()
+                # ★ 背景文字 Text を直接更新 ★
+                bot_name_background.value = username
+                bot_name_background.update()
                 bot_name_display_edit.update()
             if avatar:
                 # ★ GUI表示は加工後の画像 ★
-                processed_avatar_b64 = create_parallelogram_avatar(avatar, ICON_WIDTH, ICON_HEIGHT, SKEW_OFFSET)
+                current_page_height = page.height or page.window_height
+                # ★ current_page_height が None や 0 にならないように安全策
+                effective_height = int(current_page_height) if current_page_height and current_page_height > 0 else int(page.window_height)
+                processed_avatar_b64 = create_parallelogram_avatar(avatar, ICON_AREA_WIDTH, effective_height, SKEW_OFFSET)
                 if processed_avatar_b64:
                     bot_icon_image.src_base64 = processed_avatar_b64
                     bot_icon_image.src = None
+                    # ★ アイコンの高さを更新 (on_window_resize でも行われるが念のため) ★
+                    bot_icon_image.height = effective_height
                     bot_icon_image.update()
                     logger.info("Updated icon display with processed image.")
                 else:
-                    logger.error("Failed to process avatar for display after successful API call.")
-                    show_snackbar("API更新成功、表示用画像処理失敗", "orange") # エラー通知
+                    logger.error("Failed to process avatar for display after API call.")
+                    show_snackbar("API更新成功、表示用画像処理失敗", "orange")
         except discord.HTTPException as http_e:
             logger.error("Failed update profile (HTTPException)", exc_info=http_e)
             error_msg = f"変更失敗({http_e.status}): {http_e.text}"
             if http_e.status == 429:
-                error_msg = "変更失敗: Discord APIレート制限です。しばらく待ってください。"
+                error_msg = "変更失敗: Discord APIレート制限。"
             show_snackbar(error_msg, "red")
         except Exception as e:
             logger.error("Failed update profile (Exception)", exc_info=e)
@@ -334,22 +377,11 @@ async def main(page: ft.Page):
         page.update()
 
     # (起動/停止スイッチ関連 - 変更なし)
-    def handle_switch_change(e: ft.ControlEvent): # 型ヒントも付けるとより良い
-        logger.info(f"Switch changed: {e.control.value}") # e.control でスイッチ自身にアクセス
-        is_running = bot_core.is_bot_running()
-        logger.debug(f"Current bot running state: {is_running}")
-
-        if e.control.value and not is_running: # スイッチON かつ Bot停止中 -> 起動
-            logger.info("Switch turned ON while bot stopped. Starting bot...")
-            start_bot()
-        elif not e.control.value and is_running: # スイッチOFF かつ Bot動作中 -> 停止
-            logger.info("Switch turned OFF while bot running. Stopping bot...")
-            stop_bot()
-        else:
-             logger.warning(f"Switch state ({e.control.value}) and bot state ({is_running}) mismatch or no action needed.")
-             bot_status_switch.value = is_running # GUIのスイッチ表示を実際のBotの状態に強制的に合わせる
-             bot_status_switch.update()
-
+    def handle_switch_change(e: ft.ControlEvent):
+        logger.info(f"Switch changed: {e.control.value}"); is_running = bot_core.is_bot_running(); logger.debug(f"Current bot running state: {is_running}")
+        if e.control.value and not is_running: logger.info("Switch ON, starting bot..."); start_bot();
+        elif not e.control.value and is_running: logger.info("Switch OFF, stopping bot..."); stop_bot();
+        else: logger.warning(f"Switch/bot state mismatch: {e.control.value}/{is_running}"); bot_status_switch.value = is_running; bot_status_switch.update()
     bot_status_switch.on_change = handle_switch_change
     def start_bot():
         if is_in_critical_error_state.is_set(): logger.warning("Bot critical error."); show_snackbar("重大エラー。設定を保存・確認。", "orange"); page.update(); return
@@ -431,7 +463,6 @@ async def main(page: ft.Page):
 
 
         page.update() # 最後にページ更新
-        
     save_settings_button.on_click = save_settings_clicked
     basic_settings_view = ft.Container(padding=20, content=ft.Column([ft.Text("基本設定 (APIキー等)", size=18, weight=ft.FontWeight.BOLD), token_field, gemini_api_key_field, weather_api_key_field, delete_password_field, ft.Divider(height=30), save_settings_button], spacing=20, horizontal_alignment=ft.CrossAxisAlignment.CENTER, scroll=ft.ScrollMode.AUTO))
 
@@ -492,6 +523,7 @@ async def main(page: ft.Page):
 
     # --- 初期値読み込みと適用 (非同期化) ---
     async def load_initial_settings_and_apply():
+        nonlocal current_icon_bytes # グローバル変数を更新するため
         logger.info("Loading initial settings async...")
         error_message = None
         try:
@@ -500,24 +532,29 @@ async def main(page: ft.Page):
             logger.debug("[GUI] load_all_configs_async finished.")
             bot_name_initial = "テスト用" # Placeholder
             bot_name_display_edit.value = bot_name_initial
+            # ★ 背景文字を直接更新 ★
             bot_name_background.value = bot_name_initial
 
-            # ★ デフォルトアイコンを加工して表示 ★
+            # ★ デフォルトアイコンを読み込み、加工して表示 ★
             try:
                 default_icon_path = Path(PROJECT_ROOT) / "gui" / "assets" / "default_avatar.png"
                 if default_icon_path.exists():
                     async with aiofiles.open(default_icon_path, "rb") as f:
                         default_icon_bytes = await f.read()
-                    processed_b64 = create_parallelogram_avatar(default_icon_bytes, ICON_WIDTH, ICON_HEIGHT, SKEW_OFFSET)
+                    current_icon_bytes = default_icon_bytes # ★ 元データを保持
+                    # ★ page.window_height が確定していることを期待
+                    initial_height = int(page.window_height) if page.window_height and page.window_height > 0 else 540 # fallback
+                    processed_b64 = create_parallelogram_avatar(default_icon_bytes, ICON_AREA_WIDTH, initial_height, SKEW_OFFSET)
                     if processed_b64:
                         bot_icon_image.src_base64 = processed_b64
                         bot_icon_image.src = None
+                        bot_icon_image.height = initial_height # ★ 高さを設定
                     else:
                         logger.error("Failed to process default avatar.")
                         bot_icon_image.src = "assets/default_avatar.png" # 加工失敗時は元画像
                 else:
                     logger.warning(f"Default avatar not found at: {default_icon_path}")
-                    bot_icon_image.src = None # 見つからない場合は何も表示しないか、別のプレースホルダー
+                    bot_icon_image.src = None # なければ非表示
             except Exception as icon_load_e:
                 logger.error("Error loading/processing default avatar", exc_info=icon_load_e)
                 bot_icon_image.src = None # エラー時
@@ -532,6 +569,21 @@ async def main(page: ft.Page):
             logger.info("Initial settings loaded async and applied.")
             bot_status_switch.disabled = False
             update_gui_status("stopped")
+
+            # ★ 初期ロード後に page.update() を呼び出してレイアウトを確定させる ★
+            page.update()
+            # ★ レイアウト確定後に再度アイコンの高さを調整 ★
+            await asyncio.sleep(0.1) # 少し待機してレンダリングを待つ (必要ないかも)
+            current_page_height = page.height or page.window_height
+            effective_height = int(current_page_height) if current_page_height and current_page_height > 0 else int(page.window_height)
+            if current_icon_bytes and bot_icon_image.height != effective_height:
+                 logger.info(f"Adjusting icon height after initial load: {effective_height}")
+                 processed_b64 = create_parallelogram_avatar(current_icon_bytes, ICON_AREA_WIDTH, effective_height, SKEW_OFFSET)
+                 if processed_b64:
+                     bot_icon_image.src_base64 = processed_b64
+                     bot_icon_image.height = effective_height
+                     bot_icon_image.update()
+
         except Exception as e_load:
             logger.error("Error loading initial settings", exc_info=e_load)
             error_message = f"設定の読み込み失敗: {e_load}."
@@ -539,21 +591,81 @@ async def main(page: ft.Page):
             update_gui_status("critical_error", "設定読込エラー")
         finally:
             loading_overlay.visible = False
-            if error_message: show_snackbar(error_message, "red")
+            # ★ loading_overlay 非表示後に update ★
             page.update()
+            if error_message: show_snackbar(error_message, "red")
+
+
+    # --- ★ ウィンドウリサイズイベントハンドラ ★ ---
+    async def on_window_resize(e):
+        # ★ page.height が 0 になるケースを考慮
+        new_height = page.height if page.height and page.height > 0 else page.window_height
+        logger.debug(f"Window resized, new height: {new_height}")
+        if current_icon_bytes and new_height and new_height > 0:
+            effective_height = int(new_height)
+            # 画像を再加工して表示更新
+            processed_b64 = create_parallelogram_avatar(current_icon_bytes, ICON_AREA_WIDTH, effective_height, SKEW_OFFSET)
+            if processed_b64:
+                # アイコンの高さを更新
+                bot_icon_image.height = effective_height
+                bot_icon_image.src_base64 = processed_b64
+                bot_icon_image.src = None
+                bot_icon_image.update()
+            else:
+                logger.error("Failed to re-process icon on resize.")
+            # 背景文字のサイズも調整する場合はここに記述 (今回は不要)
+
+    page.on_resize = on_window_resize # ★ ハンドラを登録
 
     # --- アプリ終了処理 ---
     # (変更なし)
-    def on_window_event(e):
-        if e.data == "close": logger.info("Window close event received.");
-        if pub: 
-            try: pub.unsubscribe(on_log_message_received, 'log_message'); pub.unsubscribe(on_bot_status_update, 'bot_status_update'); logger.info("Unsubscribed pubsub."); 
-            except Exception as unsub_e: logger.error(f"Error unsubscribing: {unsub_e}")
-        if bot_core.is_bot_running(): logger.info("Signaling bot stop..."); bot_core.signal_stop_bot(); bot_thread = getattr(bot_core, '_bot_thread', None);
-        if bot_thread and bot_thread.is_alive(): logger.info("Waiting for bot thread (max 5s)..."); bot_thread.join(timeout=5.0); logger.info(f"Bot thread alive after join: {bot_thread.is_alive()}")
-        logger.info("Signaling log forwarder stop..."); stop_log_forwarding(); fwd_thread = log_forward_thread
-        if fwd_thread and fwd_thread.is_alive(): logger.info("Waiting for log forwarder thread (max 2s)..."); fwd_thread.join(timeout=2.0); logger.info(f"Log forwarder alive after join: {fwd_thread.is_alive()}")
-        logger.info("Exiting application."); page.window_destroy()
+    async def on_window_event(e): # ★ async に変更
+        if e.data == "close":
+            logger.info("Window close event received.");
+            if pub:
+                try: pub.unsubscribe(on_log_message_received, 'log_message'); pub.unsubscribe(on_bot_status_update, 'bot_status_update'); logger.info("Unsubscribed pubsub.");
+                except Exception as unsub_e: logger.error(f"Error unsubscribing: {unsub_e}")
+
+            bot_thread = None
+            if bot_core.is_bot_running():
+                logger.info("Signaling bot stop...");
+                stop_task = asyncio.create_task(bot_core.signal_stop_bot_async()) # ★ 非同期版停止を試みる
+                try:
+                    await asyncio.wait_for(stop_task, timeout=5.0)
+                    logger.info("Bot stop signaled successfully.")
+                except asyncio.TimeoutError:
+                    logger.warning("Timeout waiting for bot stop signal ack.")
+                except Exception as stop_e:
+                    logger.error(f"Error during async bot stop signaling: {stop_e}")
+                # スレッド取得は同期的に行う必要がある場合がある
+                bot_thread = getattr(bot_core, '_bot_thread', None)
+
+
+            if bot_thread and bot_thread.is_alive():
+                 logger.info("Waiting for bot thread (max 5s)...");
+                 # スレッドの join はブロッキングなので非同期関数内では注意が必要
+                 # asyncio.to_thread を使うか、単純に待つ
+                 try:
+                     await asyncio.get_running_loop().run_in_executor(None, bot_thread.join, 5.0)
+                     logger.info(f"Bot thread alive after join: {bot_thread.is_alive()}")
+                 except Exception as join_e:
+                     logger.error(f"Error joining bot thread: {join_e}")
+
+
+            logger.info("Signaling log forwarder stop...");
+            stop_log_forwarding(); # これは同期的
+            fwd_thread = log_forward_thread
+            if fwd_thread and fwd_thread.is_alive():
+                 logger.info("Waiting for log forwarder thread (max 2s)...");
+                 try:
+                     await asyncio.get_running_loop().run_in_executor(None, fwd_thread.join, 2.0)
+                     logger.info(f"Log forwarder alive after join: {fwd_thread.is_alive()}")
+                 except Exception as join_e:
+                     logger.error(f"Error joining log forwarder thread: {join_e}")
+
+            logger.info("Exiting application.");
+            page.window_destroy()
+
     page.window_prevent_close = True; page.on_window_event = on_window_event
 
     # --- 右エリアのメイン情報表示用Column ---
@@ -563,7 +675,7 @@ async def main(page: ft.Page):
             ft.Row(
                 [
                     bot_status_label,
-                    ft.Container(content=bot_status_text), # 位置調整
+                    ft.Container(content=bot_status_text, margin=ft.margin.only(0)),
                     bot_status_switch
                 ],
                 spacing=10, alignment=ft.MainAxisAlignment.START, vertical_alignment=ft.CrossAxisAlignment.CENTER
@@ -576,24 +688,44 @@ async def main(page: ft.Page):
     # --- 全体のレイアウト構成 ---
     page_content = ft.Row(
         [
+            # --- 左エリア ---
             ft.Container(
-                ft.Stack([
-                    ft.Container(bot_name_background, alignment=ft.alignment.center, expand=True),
-                    # ★ GestureDetector でラップしたアイコンコンテナ ★
-                    ft.Container(bot_icon_container, alignment=ft.alignment.center),
-                ]),
-                width=300, padding=ft.padding.only(left=20, right=10, top=20, bottom=20),
+                # ★ Stack に expand=True を追加 ★
+                ft.Stack(
+                    [
+                        # ★★★ 背景文字コンテナ (top, left 指定済み) ★★★
+                        bot_name_background_container,
+                        # ★ アイコンコンテナ (expand=True 設定済み) ★
+                        bot_icon_container,
+                    ],
+                    expand=True # ★ Stack自体も高さを広げる
+                ),
+                width=ICON_AREA_WIDTH,
+                expand=True, # ★ 高さを利用可能領域いっぱいに ★
+                padding=ft.padding.only(left=100), # パディングを削除
+                # ★ bgcolor を TRANSPARENT に変更 ★
+                bgcolor=ft.colors.TRANSPARENT,
+                # alignment=ft.alignment.center # Stack を含むコンテナの配置 (不要かも)
             ),
+            # --- 右エリア ---
             ft.Container(
-                ft.Column([
-                    ft.Row([ft.Container(expand=True), menu_button]),
-                    settings_view_switcher,
-                    log_area
-                ], expand=True, spacing=10),
-                expand=True, padding=ft.padding.only(left=10, right=20, top=20, bottom=10),
+                ft.Column(
+                    [
+                        ft.Row([ft.Container(expand=True), menu_button]),
+                        settings_view_switcher, # expand=True 設定済み
+                        log_area # 高さは固定
+                    ],
+                    expand=True, # ★ Column も expand=True ★
+                    spacing=10,
+                ),
+                expand=True, # ★ 右コンテナも expand=True ★
+                padding=ft.padding.only(left=10, right=20, top=20, bottom=10),
             ),
-        ], vertical_alignment=ft.CrossAxisAlignment.START, expand=True,
+        ],
+        vertical_alignment=ft.CrossAxisAlignment.START,
+        expand=True, # ★ Row 全体も expand=True ★
     )
+
 
     # --- ページへの要素追加 ---
     page.add(ft.Stack([page_content, loading_overlay]))
@@ -606,10 +738,7 @@ async def main(page: ft.Page):
 
 # --- アプリ実行 ---
 if __name__ == "__main__":
-    # ★ Pillowがなければエラーにする ★
-    if not Image or not ImageDraw or not ImageOps:
-        print("Pillow library is required but not installed. Please run: pip install Pillow")
-        sys.exit(1)
+    if not Image or not ImageDraw or not ImageOps: print("Pillow library required: pip install Pillow"); sys.exit(1)
     logger.info("Starting Flet application...")
     try: ft.app( target=main, view=ft.AppView.FLET_APP, assets_dir=os.path.join(PROJECT_ROOT, "gui/assets") )
     except Exception as e_app_start: logger.critical("Failed start Flet app", exc_info=e_app_start)

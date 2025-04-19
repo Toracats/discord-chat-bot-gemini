@@ -1,0 +1,58 @@
+{
+    "secrets": {
+        "discord_token": "gAAAAABoA3GTQVz8_j_BXR9_g4bJ8ogUtKc66y2OgP-8WG7lzyB79GbvgNM7DVS2bzXPKAcE8MwRtd7fO4DRFVYWY18T8awIlgY7ZfuLv89lyh1C0N-p9g_AlgcKK0rurvAHOHayLqz_mWKZQkzMdfjkFWSiGV575TjS9fIc8YUlT4Xhygl6cnc=",
+        "gemini_api_key": "gAAAAABoA3GTNxCjMkc5TmsaqaXRre73IZ25rsD9S1eX8Q8F528-keDtKR8N2Do8Nwnl7wCPjG1LPivkouLPFssScietZejBP41Wzio2Cy21wfq--RrigoI-LolCtCpNPO6ulmU0YoSf",
+        "weather_api_key": "gAAAAABoA3GT1vxHlCY1TIFhX-3t_aQFr0TytF6OIoxIb2kjNcbLSL_wREkNobjUM125fvJCHU5uxW3ituq5BdMQyBHdKOtNerjYkd_Mpl2WrKADYQ8pn1ZU0vbkGhZ3wufaK7mNXbzg",
+        "delete_history_password": "gAAAAABoA3GTKrSAMvtslX8aISXZhQxpoI7xNtEMlsQfFcfqPyoZ11Kv4-lmdm77vKgO26MpTxHJxdJ9HNXqCCrJ0KQdEkhz1Q=="
+    },
+    "bot_settings": {
+        "max_history": 10,
+        "max_response_length": 1800
+    },
+    "user_data": {},
+    "channel_settings": {},
+    "gemini_config": {
+        "model_name": "gemini-2.0-flash",
+        "safety_settings": [
+            {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_LOW_AND_ABOVE"
+            },
+            {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_LOW_AND_ABOVE"
+            },
+            {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_LOW_AND_ABOVE"
+            },
+            {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_LOW_AND_ABOVE"
+            }
+        ]
+    },
+    "generation_config": {
+        "temperature": 0.9,
+        "top_p": 1.0,
+        "top_k": 1,
+        "candidate_count": 1,
+        "max_output_tokens": 1024
+    },
+    "summary_config": {
+        "summary_model_name": "gemini-2.0-flash",
+        "summary_max_prompt_tokens": 4000,
+        "summary_generation_config": {
+            "temperature": 0.5,
+            "top_p": 1.0,
+            "top_k": 1,
+            "candidate_count": 1,
+            "max_output_tokens": 512
+        }
+    },
+    "weather_config": {
+        "last_location": null,
+        "auto_update_enabled": true,
+        "auto_update_interval": 60
+    }
+}
