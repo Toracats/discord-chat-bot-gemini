@@ -250,23 +250,24 @@ async def main(page: ft.Page):
             show_snackbar("Botが停止中のため名前を変更できません。", "orange")
 
     async def handle_bot_name_submit(e):
+        logger.info("--- handle_bot_name_submit called ---")
         # (関数の中身は変更なし)
-        new_name = bot_name_display_edit.value.strip()
-        bot_name_display_edit.read_only = True
-        bot_name_display_edit.border = ft.InputBorder.NONE
-        bot_name_display_edit.update()
-        current_name = ""
-        if hasattr(bot_core, 'bot') and bot_core.bot and bot_core.bot.user:
-            current_name = bot_core.bot.user.name
-        if not new_name or new_name == current_name:
-            logger.info("Bot name not changed.")
-            bot_name_display_edit.value = current_name # Revert if unchanged
-            bot_name_display_edit.update()
-            return
-        # Confirmation Dialog (変更なし)
+        new_name = bot_name_display_edit.value.strip(); bot_name_display_edit.read_only = True; bot_name_display_edit.border = ft.InputBorder.NONE; bot_name_display_edit.update(); current_name = "";
+        if hasattr(bot_core, 'bot') and bot_core.bot and bot_core.bot.user: current_name = bot_core.bot.user.name
+        if not new_name or new_name == current_name: logger.info("Bot name not changed."); bot_name_display_edit.value = current_name; bot_name_display_edit.update(); return
+        def confirm_name_change(event):
+            # この同期関数内で非同期タスクを開始
+            page.run_task(close_dialog_and_change_name, new_name, confirm_dialog_name)
+
         confirm_dialog_name = ft.AlertDialog(
-            modal=True, title=ft.Text("Bot名変更の確認"), content=ft.Text(f"Bot名を「{new_name}」に変更しますか？\n(Discordのレート制限にご注意ください)"),
-            actions=[ft.TextButton("はい", on_click=lambda _: page.run_task(close_dialog_and_change_name(new_name, confirm_dialog_name))), ft.TextButton("いいえ", on_click=lambda _: close_dialog(confirm_dialog_name))],
+            modal=True,
+            title=ft.Text("Bot名変更の確認"),
+            content=ft.Text(f"Bot名を「{new_name}」に変更しますか？\n(Discordのレート制限にご注意ください)"),
+            actions=[
+                # ★ 同期ハンドラを on_click に設定 ★
+                ft.TextButton("はい", on_click=confirm_name_change),
+                ft.TextButton("いいえ", on_click=lambda _: close_dialog(confirm_dialog_name)),
+            ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
         page.dialog = confirm_dialog_name
@@ -276,9 +277,7 @@ async def main(page: ft.Page):
     # ★ on_blur 用の同期ハンドラを定義 ★
     def handle_bot_name_blur(e):
         logger.debug("Bot name field blurred. Running submit task.")
-        # ★ page.run_task の呼び出し方を修正 ★
-        # page.run_task にはコルーチン関数と、その引数を渡す
-        page.run_task(handle_bot_name_submit, e) # 第1引数に関数、第2引数以降にその関数の引数
+        page.run_task(handle_bot_name_submit, e)
 
     # (close_dialog, close_dialog_and_change_name は変更なし)
     def close_dialog(dialog):
@@ -288,7 +287,6 @@ async def main(page: ft.Page):
     async def close_dialog_and_change_name(new_name, dialog):
         dialog.open = False; page.update(); await change_bot_profile(username=new_name)
 
-    bot_name_display_edit.on_submit = handle_bot_name_submit # on_submit は async OK
     bot_name_display_edit.on_blur = handle_bot_name_blur     # ★ 同期ハンドラを設定 ★
     bot_name_display_edit.on_click = handle_bot_name_click
 
@@ -297,84 +295,110 @@ async def main(page: ft.Page):
     file_picker = ft.FilePicker(on_result=on_file_picker_result); page.overlay.append(file_picker)
     def handle_icon_container_click(e):
         # ★ Bot 動作中か確認 (既存の処理と同じ) ★
-        if bot_core.is_bot_running():
-             logger.debug("Icon container clicked, opening file picker...")
-             file_picker.pick_files(
-                 dialog_title="Botアイコンを選択",
-                 allowed_extensions=["png", "jpg", "jpeg", "gif"],
-                 allow_multiple=False
-             )
-        else:
-             show_snackbar("Botが停止中のためアイコンを変更できません。", "orange")
-    # bot_icon_container.on_click = handle_icon_container_click # ★ レイアウト構築時に設定済
+        if bot_core.is_bot_running(): logger.debug("Icon container clicked..."); file_picker.pick_files(dialog_title="Botアイコンを選択", allowed_extensions=["png", "jpg", "jpeg", "gif"], allow_multiple=False)
+        else: show_snackbar("Botが停止中のためアイコンを変更できません。", "orange")
+    bot_icon_container.on_click = handle_icon_container_click # ★ レイアウト構築時に設定済
 
     async def handle_icon_picked(e: ft.FilePickerResultEvent):
-        nonlocal current_icon_bytes # ★ グローバル変数を使うことを宣言
+        logger.info("--- handle_icon_picked called ---") # 呼び出し確認ログ
+        nonlocal current_icon_bytes
         if e.files and len(e.files) > 0:
             selected_file = e.files[0]; image_path = selected_file.path; logger.info(f"Icon file selected: {image_path}")
             try:
                 async with aiofiles.open(image_path, "rb") as f:
                     original_avatar_bytes = await f.read()
             except Exception as img_read_e: logger.error(f"Error reading icon file: {image_path}", exc_info=img_read_e); show_snackbar(f"アイコン読込エラー: {img_read_e}", "red"); return
+            current_page_height = page.height or page.window_height; effective_height = int(current_page_height) if current_page_height and current_page_height > 0 else int(page.window_height); processed_avatar_b64 = create_parallelogram_avatar(original_avatar_bytes, ICON_AREA_WIDTH, effective_height, SKEW_OFFSET)
 
-            # Pillowで加工して表示用データを作成 (高さは現在のページ高さを目安にする)
-            current_page_height = page.height or page.window_height # 現在の高さを取得
-            # ★ current_page_height が None や 0 にならないように安全策
-            effective_height = int(current_page_height) if current_page_height and current_page_height > 0 else int(page.window_height)
-            processed_avatar_b64 = create_parallelogram_avatar(original_avatar_bytes, ICON_AREA_WIDTH, effective_height, SKEW_OFFSET)
+            def confirm_icon_change(event):
+                # この同期関数内で非同期タスクを開始
+                page.run_task(close_dialog_and_change_icon, original_avatar_bytes, confirm_dialog_icon)
 
-            confirm_dialog_icon = ft.AlertDialog(modal=True, title=ft.Text("アイコン変更の確認"),
-                content=ft.Column([ft.Text(f"この画像でアイコンを変更しますか？\n(レート制限注意)"), ft.Image(src_base64=processed_avatar_b64 if processed_avatar_b64 else None, height=100, width=100, fit=ft.ImageFit.CONTAIN)], tight=True),
-                actions=[ft.TextButton("はい", on_click=lambda _: page.run_task(close_dialog_and_change_icon(original_avatar_bytes, confirm_dialog_icon))), ft.TextButton("いいえ", on_click=lambda _: close_dialog(confirm_dialog_icon))],
+            confirm_dialog_icon = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("アイコン変更の確認"),
+                content=ft.Column([
+                    ft.Text(f"この画像でアイコンを変更しますか？\n(レート制限注意)"),
+                    ft.Image(src_base64=processed_avatar_b64 if processed_avatar_b64 else None, height=100, width=100, fit=ft.ImageFit.CONTAIN)
+                ], tight=True),
+                actions=[
+                    # ★ 同期ハンドラを on_click に設定 ★
+                    ft.TextButton("はい", on_click=confirm_icon_change),
+                    ft.TextButton("いいえ", on_click=lambda _: close_dialog(confirm_dialog_icon)),
+                ],
                 actions_alignment=ft.MainAxisAlignment.END,
             )
-            page.dialog = confirm_dialog_icon; confirm_dialog_icon.open = True; page.update()
+            page.dialog = confirm_dialog_icon
+            confirm_dialog_icon.open = True
+            page.update()
+
         else: logger.info("Icon selection cancelled.")
 
     async def close_dialog_and_change_icon(avatar_bytes: bytes, dialog):
+        logger.info("--- close_dialog_and_change_icon called ---") # ★ 呼び出し確認ログ
         nonlocal current_icon_bytes
-        dialog.open = False; page.update()
-        current_icon_bytes = avatar_bytes # ★ 変更適用前に元データを保持
-        await change_bot_profile(avatar=avatar_bytes)
+        dialog.open = False
+        page.update()
+        try:
+            current_icon_bytes = avatar_bytes # ★ 変更適用前に元データを保持 (change_bot_profile 内でも良いが一応ここでも)
+            await change_bot_profile(avatar=avatar_bytes)
+        except Exception as e_inner: # ★ 念のためここでも捕捉
+            logger.error("Error inside close_dialog_and_change_icon calling change_bot_profile", exc_info=True)
+            show_snackbar(f"アイコン変更処理中にエラー: {e_inner}", "red")
 
     async def change_bot_profile(username: Optional[str] = None, avatar: Optional[bytes] = None):
-        if not bot_core.is_bot_running() or not bot_core.bot: show_snackbar("Botが起動していないため変更できません。", "orange"); return
-        show_snackbar("プロフィールを変更中...", "blue"); page.update()
+        change_type = "ユーザー名" if username else "アイコン"
+        logger.info(f"--- Attempting to change bot profile ({change_type}) ---")
+        if not bot_core.is_bot_running() or not bot_core.bot:
+            logger.warning(f"Cannot change {change_type}: Bot not running.")
+            show_snackbar("Bot未起動。", "orange")
+            return
+        logger.debug(f"Current bot_core.bot object: {bot_core.bot}")
+        show_snackbar(f"{change_type}を変更中...", "blue")
+        page.update()
         try:
+            logger.debug("Calling bot_core.bot.edit_profile...")
             await bot_core.bot.edit_profile(username=username, avatar=avatar)
-            logger.info(f"Bot profile updated (username={username is not None}, avatar={avatar is not None})."); show_snackbar("プロフィールを変更しました。", "green");
+            logger.info(f"bot_core.bot.edit_profile call seemingly succeeded for {change_type}.")
+            show_snackbar(f"{change_type}を変更しました。", "green")
             if username:
                 bot_name_display_edit.value = username
-                # ★ 背景文字 Text を直接更新 ★
-                bot_name_background.value = username
-                bot_name_background.update()
+                if isinstance(bot_name_background, ft.Text):
+                    bot_name_background.value = username
+                    bot_name_background.update()
                 bot_name_display_edit.update()
             if avatar:
-                # ★ GUI表示は加工後の画像 ★
                 current_page_height = page.height or page.window_height
-                # ★ current_page_height が None や 0 にならないように安全策
                 effective_height = int(current_page_height) if current_page_height and current_page_height > 0 else int(page.window_height)
                 processed_avatar_b64 = create_parallelogram_avatar(avatar, ICON_AREA_WIDTH, effective_height, SKEW_OFFSET)
                 if processed_avatar_b64:
                     bot_icon_image.src_base64 = processed_avatar_b64
                     bot_icon_image.src = None
-                    # ★ アイコンの高さを更新 (on_window_resize でも行われるが念のため) ★
                     bot_icon_image.height = effective_height
                     bot_icon_image.update()
-                    logger.info("Updated icon display with processed image.")
+                    logger.info("Updated icon display.")
                 else:
                     logger.error("Failed to process avatar for display after API call.")
                     show_snackbar("API更新成功、表示用画像処理失敗", "orange")
         except discord.HTTPException as http_e:
-            logger.error("Failed update profile (HTTPException)", exc_info=http_e)
-            error_msg = f"変更失敗({http_e.status}): {http_e.text}"
+            logger.error(f"Discord HTTPException during {change_type} update: status={http_e.status}, code={http_e.code}, text={http_e.text}", exc_info=True)
+            error_msg = f"{change_type}変更失敗({http_e.status}): {http_e.text}"
             if http_e.status == 429:
-                error_msg = "変更失敗: Discord APIレート制限。"
+                error_msg = f"{change_type}変更失敗: Discord APIレート制限。"
+            elif http_e.status == 403:
+                error_msg = f"{change_type}変更失敗: 権限不足。"
+            elif http_e.status == 400:
+                error_msg = f"{change_type}変更失敗: 不正データ。"
             show_snackbar(error_msg, "red")
+        except discord.errors.Forbidden as forbidden_e:
+            logger.error(f"Discord Forbidden error during {change_type} update.", exc_info=True)
+            show_snackbar(f"{change_type}変更失敗: Bot権限不足。", "red")
         except Exception as e:
-            logger.error("Failed update profile (Exception)", exc_info=e)
-            show_snackbar(f"予期せぬエラー: {e}", "red")
-        page.update()
+            logger.error(f"Unexpected error during {change_type} update.", exc_info=True)
+            show_snackbar(f"{change_type}変更中に予期せぬエラー: {e}", "red")
+        finally:
+            logger.debug(f"--- Finished change_bot_profile attempt ({change_type}) ---")
+            page.update()
 
     # (起動/停止スイッチ関連 - 変更なし)
     def handle_switch_change(e: ft.ControlEvent):
