@@ -243,6 +243,18 @@ async def save_conversation_history_nolock():
         async with file_access_lock: _save_json(HISTORY_FILENAME, conversation_history)
     except Exception as e: logger.error("Save history error", exc_info=e)
 
+# --- 設定ファイル再読み込み関数 ---
+def reload_primary_config():
+    """プライマリ設定ファイルを再読み込みし、app_config を更新する"""
+    global app_config
+    logger.info("Reloading primary configuration from file...")
+    # ★ ロックは不要 (読み取りとメモリ更新のみ)
+    reloaded_config = _load_primary_config() # 復号も内部で行われる
+    # ★ user_data 部分はスレッドセーフに更新
+    with user_data_lock:
+         app_config = reloaded_config # ロードした内容でメモリを更新
+    logger.info("Primary configuration reloaded.")
+
 # --- 設定値取得関数 (★ 天気関連ゲッター追加) ---
 def get_discord_token() -> Optional[str]: return app_config.get("secrets", {}).get("discord_token")
 def get_gemini_api_key() -> Optional[str]: return app_config.get("secrets", {}).get("gemini_api_key")

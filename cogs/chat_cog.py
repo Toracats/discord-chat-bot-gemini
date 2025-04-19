@@ -25,8 +25,6 @@ class ChatCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.genai_client = None
-        self.initialize_genai_client()
-        logger.info("ChatCog loaded.")
 
     # --- 呼び名取得ヘルパー関数 ---
     def get_call_name(self, target_user_id: Optional[int]) -> str:
@@ -38,12 +36,23 @@ class ChatCog(commands.Cog):
         if user: return user.display_name
         return f"User {target_user_id}"
 
-    def initialize_genai_client(self):
+    def initialize_genai_client(self) -> bool: # ★ 返り値を bool に変更
+        """Geminiクライアントを初期化し、成功/失敗を返す"""
+        api_key = config_manager.get_gemini_api_key()
+        if not api_key:
+            logger.error("Gemini API Key not found in config. ChatCog cannot function.")
+            self.genai_client = None
+            return False # ★ 失敗を示す False を返す
+
         try:
-            api_key = config_manager.get_gemini_api_key()
-            if not api_key: logger.error("GOOGLE_AI_KEY not found."); self.genai_client = None; return
-            self.genai_client = genai.Client(api_key=api_key); logger.info("Gemini client initialized.")
-        except Exception as e: logger.error("Failed to initialize Gemini client", exc_info=e); self.genai_client = None
+            genai.Client(api_key=api_key)
+            self.genai_client = genai
+            logger.info("Gemini client initialized successfully for ChatCog.")
+            return True # ★ 成功を示す True を返す
+        except Exception as e:
+            logger.error("Failed to initialize Gemini client for ChatCog", exc_info=e)
+            self.genai_client = None
+            return False # ★ 失敗を示す False を返す
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -296,6 +305,18 @@ class ChatCog(commands.Cog):
                      else: await message.reply(reply_msg, mention_author=False)
                 except discord.HTTPException: logger.error("Failed send unexpected error message Discord.")
 
-# Cogセットアップ関数 (変更なし)
+# Cogセットアップ関数 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(ChatCog(bot))
+    """Cogのセットアップ関数"""
+    cog = ChatCog(bot)
+    if cog.initialize_genai_client():
+        await bot.add_cog(cog)
+        logger.info("ChatCog setup complete and added to bot.")
+    else:
+        error_msg = "ChatCog setup failed due to initialization error (API Key missing?). Cog will not be loaded."
+        logger.error(error_msg)
+        # ★ 初期化失敗時に ExtensionFailed を発生させる
+        #    original には具体的な例外がないため None を渡すか、
+        #    あるいはカスタム例外や RuntimeError を渡しても良い
+        #    ここでは RuntimeError を使う例
+        raise commands.ExtensionFailed(name="cogs.chat_cog", original=RuntimeError(error_msg))
