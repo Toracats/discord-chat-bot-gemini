@@ -125,12 +125,23 @@ async def run_bot_until_stopped(token: str):
         #     pass
 
         # 停止処理 (start_taskの結果を待つ必要はない)
+        login_failed = False # ★ ログイン失敗フラグ
         if start_task.done():
-             try: await start_task # 例外が発生していればここで捕捉・ログ出力
-             except discord.errors.LoginFailure: logger.error("Login failed: Improper token."); publish_status("error", "Login failed: Invalid token")
-             except discord.errors.PrivilegedIntentsRequired: logger.error("Login failed: Intents not enabled."); publish_status("error", "Intents not enabled")
-             except asyncio.CancelledError: pass # キャンセルは正常
-             except Exception as e: logger.error("Exception during bot exec:", exc_info=e); publish_status("error", f"Runtime error: {e}")
+             try: await start_task
+             except discord.errors.LoginFailure:
+                  logger.error("Login failed: Improper token."); publish_status("error", "ログイン失敗: トークン不正"); login_failed = True # ★ フラグを立てる
+             except discord.errors.PrivilegedIntentsRequired:
+                  logger.error("Login failed: Intents not enabled."); publish_status("error", "ログイン失敗: Intent不足"); login_failed = True # ★ フラグを立てる (エラー扱い)
+             except asyncio.CancelledError: pass
+             except Exception as e: logger.error("Exception during bot exec:", exc_info=e); publish_status("error", f"ランタイムエラー: {e}")
+
+        if not login_failed:
+             await stop_bot_runner()
+        else:
+             # ログイン失敗時はスレッドは終了するが、GUIはエラー表示のままにする
+             logger.info("Bot runner stopped due to login failure.")
+             bot = None # botインスタンスはクリア
+             # publish_status("stopped") は呼ばない
 
         await stop_bot_runner() # ★ stop_event 引数削除
 

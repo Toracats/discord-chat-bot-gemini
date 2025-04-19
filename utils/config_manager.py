@@ -50,9 +50,9 @@ DEFAULT_MAX_HISTORY = 10; DEFAULT_MAX_RESPONSE_LENGTH = 1800
 DEFAULT_PERSONA_PROMPT = "あなたは親切なAIアシスタントです。"; DEFAULT_RANDOM_DM_PROMPT = "最近どうですか？何か面白いことありましたか？"
 DEFAULT_GENERATION_CONFIG = {"temperature": 0.9, "top_p": 1.0, "top_k": 1, "candidate_count": 1, "max_output_tokens": 1024}
 DEFAULT_SAFETY_SETTINGS = [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_LOW_AND_ABOVE"}, {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_LOW_AND_ABOVE"}, {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_LOW_AND_ABOVE"}, {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_LOW_AND_ABOVE"}]
-DEFAULT_GEMINI_CONFIG = {"model_name": "gemini-1.5-flash", "safety_settings": DEFAULT_SAFETY_SETTINGS}
+DEFAULT_GEMINI_CONFIG = {"model_name": "gemini-2.0-flash", "safety_settings": DEFAULT_SAFETY_SETTINGS}
 DEFAULT_RANDOM_DM_CONFIG = {"enabled": False, "min_interval": 21600, "max_interval": 172800, "stop_start_hour": 23, "stop_end_hour": 7, "last_interaction": None, "next_send_time": None}
-DEFAULT_SUMMARY_MODEL = "gemini-1.5-flash"; DEFAULT_SUMMARY_MAX_TOKENS = 4000
+DEFAULT_SUMMARY_MODEL = "gemini-2.0-flash"; DEFAULT_SUMMARY_MAX_TOKENS = 4000
 DEFAULT_SUMMARY_GENERATION_CONFIG = {"temperature": 0.5, "top_p": 1.0, "top_k": 1, "candidate_count": 1, "max_output_tokens": 512}
 # ★↓↓↓ 天気自動更新のデフォルト値を追加 ↓↓↓★
 DEFAULT_WEATHER_AUTO_UPDATE_INTERVAL_MINUTES = 60 # デフォルト60分
@@ -290,6 +290,15 @@ def get_all_user_identifiers() -> Dict[int, str]:
         try: uid = int(uid_str); nickname = u_data.get("nickname"); identifiers[uid] = nickname if nickname else f"User {uid}"
         except ValueError: logger.warning(f"Invalid user ID: {uid_str}")
     return identifiers
+def get_summary_model_name() -> str:
+    # ★ app_config から取得するように修正 ★
+    return app_config.get("summary_config", {}).get('summary_model_name', DEFAULT_SUMMARY_MODEL)
+def get_summary_max_prompt_tokens() -> int:
+    # ★ app_config から取得するように修正 ★
+    return app_config.get("summary_config", {}).get('summary_max_prompt_tokens', DEFAULT_SUMMARY_MAX_TOKENS)
+def get_summary_generation_config_dict() -> Dict[str, Any]:
+     # ★ app_config から取得するように修正 ★
+     return app_config.get("summary_config", {}).get('summary_generation_config', DEFAULT_SUMMARY_GENERATION_CONFIG.copy())
 
 # --- 設定値更新関数 (メモリ上のapp_configを変更) (★ 天気関連追加) ---
 def update_secret_in_memory(key: str, value: Optional[str]):

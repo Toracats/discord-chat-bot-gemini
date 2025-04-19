@@ -1,4 +1,4 @@
-# gui/main_gui.py (エラー表示維持・リセット修正 - 完全版)
+# gui/main_gui.py (DeprecationWarning解消 - 完全版)
 
 import flet as ft
 import sys
@@ -44,24 +44,23 @@ try:
     LOG_FORMAT = '%(asctime)s:%(levelname)s:%(name)s: %(message)s'
     LOG_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
     root_logger = logging.getLogger()
-    # ハンドラが重複しないように基本的な設定を行う
     if not root_logger.hasHandlers():
-         root_logger.setLevel(logging.INFO)
-         formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
-         # Console Handler
-         console_handler = logging.StreamHandler(sys.stdout); console_handler.setFormatter(formatter); console_handler.setLevel(logging.INFO); root_logger.addHandler(console_handler)
-         # File Handler
-         try:
-             LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-             file_handler = logging.handlers.RotatingFileHandler(LOG_FILE_PATH, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8')
-             file_handler.setFormatter(formatter); file_handler.setLevel(logging.DEBUG)
-             root_logger.addHandler(file_handler); logger.info(f"File logging initialized: {LOG_FILE_PATH}")
-         except Exception as e_file_log: logger.error(f"Failed file logging!", exc_info=e_file_log)
-         # PubSub Handler
-         if pub:
-             pubsub_handler = PubSubLogHandler(); pubsub_handler.setFormatter(formatter); pubsub_handler.setLevel(logging.INFO)
-             root_logger.addHandler(pubsub_handler); logger.info("PubSub log handler initialized.")
-         else: logger.warning("PyPubSub not found, GUI log forwarding disabled.")
+        root_logger.setLevel(logging.INFO)
+        formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
+        console_handler = logging.StreamHandler(sys.stdout); console_handler.setFormatter(formatter); console_handler.setLevel(logging.INFO); root_logger.addHandler(console_handler)
+        try:
+            LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.handlers.RotatingFileHandler(LOG_FILE_PATH, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8')
+            file_handler.setFormatter(formatter); file_handler.setLevel(logging.DEBUG)
+            root_logger.addHandler(file_handler); logger.info(f"File logging initialized: {LOG_FILE_PATH}")
+        except Exception as e_file_log: logger.error(f"Failed file logging!", exc_info=e_file_log)
+        if pub:
+            pubsub_handler = PubSubLogHandler(); pubsub_handler.setFormatter(formatter); pubsub_handler.setLevel(logging.INFO)
+            root_logger.addHandler(pubsub_handler); logger.info("PubSub log handler initialized.")
+        else: logger.warning("PyPubSub not found, GUI log forwarding disabled.")
+
+        logging.getLogger("flet").setLevel(logging.INFO)
+        logging.getLogger("flet_core").setLevel(logging.INFO) 
 except Exception as e_log_init:
      print(f"CRITICAL ERROR during logging setup: {e_log_init}")
      logging.basicConfig(level=logging.INFO); logging.critical(f"Logging setup failed: {e_log_init}", exc_info=True)
@@ -77,19 +76,31 @@ def main(page: ft.Page):
     is_in_critical_error_state = threading.Event(); is_in_critical_error_state.clear()
 
     # --- コントロール参照 ---
-    status_icon = ft.Icon(ft.icons.CIRCLE, color="red", tooltip="停止中")
+    status_icon = ft.Icon("fiber_manual_record", color="red", tooltip="停止中") # ★ 文字列
     status_text = ft.Text("停止中", size=16, weight=ft.FontWeight.BOLD)
-    start_stop_button = ft.ElevatedButton("起動", icon=ft.icons.PLAY_ARROW_ROUNDED, tooltip="Botを起動します")
+    start_stop_button = ft.ElevatedButton("起動", icon="play_arrow_rounded", tooltip="Botを起動します") # ★ 文字列
     log_output_list = ft.ListView(expand=True, spacing=5, auto_scroll=True, divider_thickness=1)
     MAX_LOG_LINES = 500
-    log_panel = ft.ExpansionPanelList( expand_icon_color="amber", elevation=4, divider_color="amber_100", controls=[ ft.ExpansionPanel( can_tap_header=True, header=ft.ListTile(title=ft.Text("ログ表示エリア (クリックで展開/格納)")), content=ft.Container( content=log_output_list, padding=ft.padding.only(top=10, bottom=10, left=15, right=15), border_radius=5, height=300, border=ft.border.all(1, ft.colors.with_opacity(0.26, "black"))))])
+    log_panel = ft.ExpansionPanelList( expand_icon_color="amber", elevation=4, divider_color="amber_100", 
+    controls=[ft.ExpansionPanel(
+        can_tap_header=True,
+        header=ft.ListTile(title=ft.Text("ログ表示エリア (クリックで展開/格納)")),
+        content=ft.Container(
+            content=log_output_list,
+            padding=ft.padding.only(top=10, bottom=10, left=15, right=15),
+            border_radius=5,
+            height=300,
+            border=ft.border.all(1, ft.Colors.with_opacity(0.26, ft.Colors.BLACK))
+        )
+    )]  
+    )# 色はOK
     token_field = ft.TextField(label="Discord Bot Token", password=True, can_reveal_password=True, width=450)
     gemini_api_key_field = ft.TextField(label="Gemini API Key", password=True, can_reveal_password=True, width=450)
     weather_api_key_field = ft.TextField(label="OpenWeatherMap API Key (Optional)", password=True, can_reveal_password=True, width=450)
     delete_password_field = ft.TextField(label="History Delete Password (Optional)", password=True, can_reveal_password=True, width=450)
     weather_auto_update_switch = ft.Switch(label="天気自動更新を有効にする", value=True)
     weather_interval_field = ft.TextField(label="自動更新間隔 (分)", value="60", width=150, keyboard_type=ft.KeyboardType.NUMBER, input_filter=ft.InputFilter(allow=True, regex_string=r"[0-9]+"), tooltip="最低10分")
-    save_button = ft.ElevatedButton("設定を保存", icon=ft.icons.SAVE_ROUNDED)
+    save_button = ft.ElevatedButton("設定を保存", icon="save_rounded") # ★ 文字列
     status_snackbar = ft.SnackBar(content=ft.Text(""), open=False)
 
     # --- PubSub リスナー (ログ用) ---
@@ -105,40 +116,37 @@ def main(page: ft.Page):
     def update_gui_status(status: str, message: Optional[str] = None):
         logger.debug(f"Updating GUI Status: {status}, Message: {message}")
         current_color = "red"; current_text = "停止中"; current_tooltip = "停止中"
-        button_text = "起動"; button_icon = ft.icons.PLAY_ARROW_ROUNDED; button_enabled = True
+        button_text = "起動"; button_icon = "play_arrow_rounded"; button_enabled = True # ★ 文字列
 
-        # ★ まず重大エラー状態かどうかをチェック
         if is_in_critical_error_state.is_set() and status != "critical_error":
             logger.debug(f"Maintaining critical error state despite receiving status: {status}")
-            # 表示は現在のまま維持 (ボタン無効、テキスト「重大エラー」など)
-            # status_snackbar から最新のエラーメッセージを取得試行
             snackbar_msg = getattr(status_snackbar.content, 'value', '設定確認要') if status_snackbar.content else '設定確認要'
             tooltip_msg = snackbar_msg[:100] + ('...' if len(snackbar_msg) > 100 else '')
             current_color = "red"; current_text = "重大エラー"; current_tooltip = f"重大エラー: {tooltip_msg}";
-            button_text = "エラー"; button_icon = ft.icons.ERROR_OUTLINE_ROUNDED; button_enabled = False
-            # ここで return するのではなく、下のコントロール更新処理を実行させる
-        # 各ステータスに応じた処理 (エラー状態でない、またはエラー発生/更新時)
-        elif status == "starting": current_color = "orange"; current_text = "起動処理中..."; current_tooltip = "Bot起動中..."; button_text = "処理中..."; button_icon = ft.icons.HOURGLASS_EMPTY_ROUNDED; button_enabled = False; is_in_critical_error_state.clear()
-        elif status == "connecting": current_color = "orange"; current_text = "Discord接続中..."; current_tooltip = "Discord接続中..."; button_text = "処理中..."; button_icon = ft.icons.HOURGLASS_EMPTY_ROUNDED; button_enabled = False
-        elif status == "ready": current_color = "green"; current_text = "動作中"; current_tooltip = "Bot動作中"; button_text = "停止"; button_icon = ft.icons.STOP_ROUNDED; button_enabled = True; is_in_critical_error_state.clear()
-        elif status == "stopping": current_color = "orange"; current_text = "停止処理中..."; current_tooltip = "Bot停止中..."; button_text = "処理中..."; button_icon = ft.icons.HOURGLASS_EMPTY_ROUNDED; button_enabled = False
-        elif status == "stopped": # 重大エラー中でなければ通常の停止
-             current_color = "red"; current_text = "停止中"; current_tooltip = "Bot停止中"; button_text = "起動"; button_icon = ft.icons.PLAY_ARROW_ROUNDED; button_enabled = True; is_in_critical_error_state.clear()
-        elif status == "error": # 通常エラー (ボタンは有効)
-             current_color = "red"; current_text = "エラー発生"; current_tooltip = f"エラー: {message or '不明'}"; button_text = "起動"; button_icon = ft.icons.PLAY_ARROW_ROUNDED; button_enabled = True; is_in_critical_error_state.clear() # 通常エラーではフラグ解除
+            button_text = "エラー"; button_icon = "error_outline_rounded"; button_enabled = False # ★ 文字列
+        elif status == "starting": current_color = "orange"; current_text = "起動処理中..."; current_tooltip = "Bot起動中..."; button_text = "処理中..."; button_icon = "hourglass_empty_rounded"; button_enabled = False; is_in_critical_error_state.clear() # ★ 文字列
+        elif status == "connecting": current_color = "orange"; current_text = "Discord接続中..."; current_tooltip = "Discord接続中..."; button_text = "処理中..."; button_icon = "hourglass_empty_rounded"; button_enabled = False # ★ 文字列
+        elif status == "ready": current_color = "green"; current_text = "動作中"; current_tooltip = "Bot動作中"; button_text = "停止"; button_icon = "stop_rounded"; button_enabled = True; is_in_critical_error_state.clear() # ★ 文字列
+        elif status == "stopping": current_color = "orange"; current_text = "停止処理中..."; current_tooltip = "Bot停止中..."; button_text = "処理中..."; button_icon = "hourglass_empty_rounded"; button_enabled = False # ★ 文字列
+        elif status == "stopped":
+             if is_in_critical_error_state.is_set():
+                  current_color = "red"; current_text = "エラー(停止済)"; snackbar_msg = getattr(status_snackbar.content, 'value', '設定を確認'); tooltip_msg = snackbar_msg[:100] + ('...' if len(snackbar_msg) > 100 else ''); current_tooltip = f"エラーのため停止: {tooltip_msg}"
+                  button_text = "起動"; button_icon = "play_arrow_rounded"; button_enabled = True # ★ 文字列
+             else: current_color = "red"; current_text = "停止中"; current_tooltip = "Bot停止中"; button_text = "起動"; button_icon = "play_arrow_rounded"; button_enabled = True; is_in_critical_error_state.clear() # ★ 文字列
+        elif status == "error":
+             current_color = "red"; current_text = "エラー発生"; current_tooltip = f"エラー: {message or '不明'}"; button_text = "起動"; button_icon = "play_arrow_rounded"; button_enabled = True; is_in_critical_error_state.clear() # ★ 文字列
              status_snackbar.content = ft.Text(f"エラー: {message or '不明'}"); status_snackbar.bgcolor = "red_700"; status_snackbar.open = True
-        elif status == "critical_error": # ★ 重大エラー (ボタン無効)
-             current_color = "red"; current_text = "重大エラー"; current_tooltip = f"重大エラー: {message or '不明'}. 設定確認要"; button_text = "エラー"; button_icon = ft.icons.ERROR_OUTLINE_ROUNDED; button_enabled = False; is_in_critical_error_state.set() # ★フラグ設定
+        elif status == "critical_error":
+             current_color = "red"; current_text = "重大エラー"; current_tooltip = f"重大エラー: {message or '不明'}. 設定確認要"; button_text = "エラー"; button_icon = "error_outline_rounded"; button_enabled = False; is_in_critical_error_state.set() # ★ 文字列
              status_snackbar.content = ft.Text(f"重大エラー: {message or '不明'}. 設定確認/保存要"); status_snackbar.bgcolor = "red_700"; status_snackbar.open = True
         else: logger.warning(f"Unknown status: {status}"); return
 
-        # コントロール更新
         status_icon.color = current_color; status_icon.tooltip = current_tooltip; status_text.value = current_text
         start_stop_button.text = button_text; start_stop_button.icon = button_icon; start_stop_button.disabled = not button_enabled
         try: page.update()
         except Exception as e: logger.warning(f"Failed page update in update_gui_status: {e}")
 
-    # --- PubSub リスナー (Botステータス用 - 変更なし) ---
+    # --- PubSub リスナー (Botステータス用) ---
     def on_bot_status_update(payload: Dict[str, Any]):
         logger.debug(f"Received bot_status_update payload: {payload}")
         status = payload.get("status"); message = payload.get("message")
@@ -157,7 +165,6 @@ def main(page: ft.Page):
     # --- イベントハンドラ ---
     def save_settings_clicked(e):
         logger.info("Save settings button clicked.")
-        # ... (設定値取得, バリデーション) ...
         token = token_field.value.strip() if token_field.value else None; gemini_key = gemini_api_key_field.value.strip() if gemini_api_key_field.value else None
         weather_key = weather_api_key_field.value.strip() if weather_api_key_field.value else None; delete_pass = delete_password_field.value.strip() if delete_password_field.value else None
         weather_enabled = weather_auto_update_switch.value; weather_interval = config_manager.DEFAULT_WEATHER_AUTO_UPDATE_INTERVAL_MINUTES
@@ -173,9 +180,7 @@ def main(page: ft.Page):
             config_manager.app_config.setdefault("secrets", {})["weather_api_key"] = weather_key; config_manager.app_config.setdefault("secrets", {})["delete_history_password"] = delete_pass
             config_manager.update_weather_auto_update_enabled_in_memory(weather_enabled); config_manager.update_weather_auto_update_interval_in_memory(weather_interval)
             config_manager.save_app_config()
-            is_in_critical_error_state.clear() # 保存成功でエラーフラグ解除
-            save_successful = True
-            # WeatherCog 通知
+            is_in_critical_error_state.clear(); save_successful = True
             current_bot = getattr(bot_core, 'bot', None)
             if current_bot:
                  weather_cog = current_bot.get_cog("WeatherMoodCog")
@@ -186,22 +191,11 @@ def main(page: ft.Page):
             else: logger.info("Bot not running, WeatherCog task update deferred.")
             status_snackbar.content = ft.Text("設定を保存しました。"); status_snackbar.bgcolor = "green_700"; logging.info("Settings saved.")
         except Exception as e_save: logger.error("Failed to save settings...", exc_info=e_save); status_snackbar.content = ft.Text(f"保存エラー: {e_save}"); status_snackbar.bgcolor = "red_700"
-
-        # ★★★ ボタン状態更新ロジック ★★★
-        # 保存操作の後、現在のエラーフラグに基づいて表示を更新する
         if save_successful:
             logger.info("Settings saved successfully, updating GUI status based on current bot state.")
-            # is_in_critical_error_state は解除されたはず
-            if bot_core.is_bot_running():
-                 # Botがまだ(あるいは別の理由で)動いている場合 (通常はエラー後は停止しているはずだが念のため)
-                 update_gui_status("ready", "設定保存完了")
-            else:
-                 # Botが停止している場合 (エラー後、または通常停止後)
-                 update_gui_status("stopped", "設定保存完了") # これでボタンが有効な「起動」になる
-        # 保存失敗時は Snackbar 表示のみ (エラー状態は維持される)
-
+            if bot_core.is_bot_running(): update_gui_status("ready", "設定保存完了")
+            else: update_gui_status("stopped", "設定保存完了")
         status_snackbar.open = True
-        # page.update() # update_gui_status内で呼ばれるので不要かも
 
     def start_stop_clicked(e):
         is_running = bot_core.is_bot_running(); logger.info(f"Start/Stop clicked! Thread alive: {is_running}")
@@ -210,10 +204,8 @@ def main(page: ft.Page):
             try: bot_core.signal_stop_bot()
             except Exception as e_stop: logger.error("Error signaling stop", exc_info=e_stop); update_gui_status("error", f"停止信号エラー: {e_stop}")
         else:
-            # ★ 重大エラーフラグをチェック
             if is_in_critical_error_state.is_set():
                 logger.warning("Bot is in critical error state. Save settings first."); status_snackbar.content = ft.Text("重大エラー状態です。設定を保存してください。"); status_snackbar.bgcolor = "orange_700"; status_snackbar.open = True; page.update(); return
-            # 通常のエラー("error"ステータス)では起動を試行する
             logger.info("Attempting to start bot..."); update_gui_status("starting")
             try:
                 success = bot_core.start_bot_thread()
@@ -235,7 +227,8 @@ def main(page: ft.Page):
          if e.data == "close":
              logger.info("Window close event received.")
              if pub: 
-                try: pub.unsubscribe(on_log_message_received, 'log_message'); pub.unsubscribe(on_bot_status_update, 'bot_status_update'); logger.info("Unsubscribed pubsub.")
+                try: 
+                    pub.unsubscribe(on_log_message_received, 'log_message'); pub.unsubscribe(on_bot_status_update, 'bot_status_update'); logger.info("Unsubscribed pubsub.")
                 except Exception as unsub_e: logger.error(f"Error unsubscribing: {unsub_e}")
              if bot_core.is_bot_running():
                  logger.info("Signaling bot stop..."); bot_core.signal_stop_bot()
@@ -253,8 +246,19 @@ def main(page: ft.Page):
 
     # --- タブ作成 ---
     tabs = ft.Tabs( selected_index=0, animation_duration=300, expand=True,
-        tabs=[ ft.Tab(text="メイン", icon=ft.icons.HOME_ROUNDED, content=ft.Container(padding=20, content=ft.Column( [ft.Row([status_icon, status_text], alignment=ft.MainAxisAlignment.START, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=10), start_stop_button, ft.Divider(height=20), log_panel,], spacing=15, scroll=ft.ScrollMode.AUTO))),
-               ft.Tab(text="基本設定", icon=ft.icons.SETTINGS_ROUNDED, content=ft.Container(padding=20, content=ft.Column( [token_field, gemini_api_key_field, weather_api_key_field, delete_password_field, ft.Divider(height=20), ft.Text("天気自動更新設定", weight=ft.FontWeight.BOLD), weather_auto_update_switch, weather_interval_field, ft.Divider(height=30), save_button,], spacing=20, horizontal_alignment=ft.CrossAxisAlignment.CENTER, scroll=ft.ScrollMode.AUTO))),] )
+        tabs=[
+            ft.Tab(
+                text="メイン",
+                icon="home_rounded", # ★ 文字列指定
+                content=ft.Container(padding=20, content=ft.Column( [ft.Row([status_icon, status_text], alignment=ft.MainAxisAlignment.START, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=10), start_stop_button, ft.Divider(height=20), log_panel,], spacing=15, scroll=ft.ScrollMode.AUTO))
+            ),
+            ft.Tab(
+                text="基本設定",
+                icon="settings_rounded", # ★ 文字列指定
+                content=ft.Container(padding=20, content=ft.Column( [token_field, gemini_api_key_field, weather_api_key_field, delete_password_field, ft.Divider(height=20), ft.Text("天気自動更新設定", weight=ft.FontWeight.BOLD), weather_auto_update_switch, weather_interval_field, ft.Divider(height=30), save_button,], spacing=20, horizontal_alignment=ft.CrossAxisAlignment.CENTER, scroll=ft.ScrollMode.AUTO))
+            ),
+        ]
+    )
 
     # --- ページ構成 ---
     page.add(tabs); page.add(status_snackbar)
