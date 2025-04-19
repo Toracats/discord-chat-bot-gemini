@@ -1,4 +1,4 @@
-# cogs/chat_cog_GUI.py (generate_content 呼び出し修正版)
+# cogs/chat_cog.py (デバッグログ追加・エラーハンドリング強化版)
 
 import discord
 from discord.ext import commands
@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from cogs.history_cog import HistoryCog
     from cogs.processing_cog import ProcessingCog
     from cogs.weather_mood_cog import WeatherMoodCog
-    # RandomDMCog も追加 (reset_user_timer 呼び出しのため)
     from cogs.random_dm_cog import RandomDMCog
 else: # 実行時は get_cog で取得するため None でも可
     HistoryCog = None
@@ -30,7 +29,8 @@ else: # 実行時は get_cog で取得するため None でも可
 
 
 logger = logging.getLogger(__name__)
-# logger.setLevel(logging.DEBUG) # デバッグ用
+# ★ デバッグログを有効にする ★
+logger.setLevel(logging.DEBUG)
 
 class ChatCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -52,14 +52,12 @@ class ChatCog(commands.Cog):
 
     def initialize_genai_client(self) -> bool:
         """Geminiクライアントを初期化し、成功/失敗を返す"""
-        # config_manager からキーを取得するのは変更なし
         api_key = config_manager.get_gemini_api_key()
         if not api_key:
             logger.error("Gemini API Key not found in config. ChatCog cannot function.")
             self.genai_client = None
             return False
         try:
-            # クライアント初期化は変更なし
             self.genai_client = genai.Client(api_key=api_key)
             logger.info("Gemini client initialized successfully for ChatCog.")
             return True
@@ -71,11 +69,11 @@ class ChatCog(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         """メッセージ受信時の処理"""
-        # --- メッセージフィルタリング (変更なし) ---
+        # --- メッセージフィルタリング ---
         if message.author == self.bot.user or message.author.bot: return
         if message.mention_everyone: return
 
-        # --- 応答判定 (変更なし) ---
+        # --- 応答判定 ---
         should_respond = False
         is_dm = isinstance(message.channel, discord.DMChannel)
         if is_dm:
@@ -92,7 +90,7 @@ class ChatCog(commands.Cog):
 
         logger.info(f"Received message from {message.author.name} (ID: {message.author.id}) in {'DM' if is_dm else f'channel #{message.channel.name}'}")
 
-        # --- RandomDMCog タイマーリセット呼び出し (変更なし) ---
+        # --- RandomDMCog タイマーリセット呼び出し ---
         random_dm_cog: Optional[RandomDMCog] = self.bot.get_cog("RandomDMCog")
         if random_dm_cog and hasattr(random_dm_cog, 'reset_user_timer'):
             try:
@@ -103,22 +101,23 @@ class ChatCog(commands.Cog):
         elif not random_dm_cog:
              logger.warning("RandomDMCog not found, cannot reset timer.")
 
-
-        # --- Gemini クライアントチェック (変更なし) ---
+        # --- Gemini クライアントチェック ---
         if not self.genai_client:
             logger.error("ChatCog: Gemini client not initialized.")
             await message.reply("エラー: AI機能が利用できません。", mention_author=False)
             return
 
+        # ★★★ 'typing' 開始 ★★★
         async with message.channel.typing():
+            response = None # ★ response 変数を初期化
             try:
-                # --- メッセージ内容とユーザー情報の準備 (変更なし) ---
+                # --- メッセージ内容とユーザー情報の準備 ---
                 cleaned_text = helpers.clean_discord_message(message.content)
                 user_id = message.author.id
                 channel_id = message.channel.id if not is_dm else None
                 call_name = self.get_call_name(user_id)
 
-                # --- 依存Cogの取得 (get_cog を使用) ---
+                # --- 依存Cogの取得 ---
                 history_cog: Optional[HistoryCog] = self.bot.get_cog("HistoryCog")
                 processing_cog: Optional[ProcessingCog] = self.bot.get_cog("ProcessingCog")
                 weather_mood_cog: Optional[WeatherMoodCog] = self.bot.get_cog("WeatherMoodCog")
@@ -128,7 +127,7 @@ class ChatCog(commands.Cog):
                     await message.reply("エラー: 履歴管理機能が見つかりません。", mention_author=False)
                     return
 
-                # --- 履歴と現在のメッセージパートの準備 (ProcessingCog との連携含む) ---
+                # --- 履歴と現在のメッセージパートの準備 ---
                 history_list = await history_cog.get_global_history_for_prompt()
 
                 current_parts: List[genai_types.Part] = []
@@ -136,12 +135,10 @@ class ChatCog(commands.Cog):
                     current_parts.append(genai_types.Part(text=cleaned_text))
 
                 if processing_cog:
-                    # 添付ファイル処理
                     attachment_parts = await processing_cog.process_attachments(message.attachments)
                     if attachment_parts:
                         current_parts.extend(attachment_parts)
                         logger.debug(f"Added {len(attachment_parts)} parts from attachments.")
-                    # URL処理 (添付がない場合のみ)
                     if not message.attachments:
                         url_content_parts = await processing_cog.process_url_in_message(cleaned_text)
                         if url_content_parts:
@@ -152,12 +149,11 @@ class ChatCog(commands.Cog):
 
                 if not current_parts:
                     logger.warning("No processable content found in the message.")
-                    # 処理する内容がない場合は応答しない
-                    return
+                    return # 処理する内容がない場合は応答しない
 
                 current_content = genai_types.Content(role="user", parts=current_parts)
 
-                # --- 要約履歴の準備 (変更なし) ---
+                # --- 要約履歴の準備 ---
                 summaries_all = await config_manager.load_summaries()
                 max_summary_tokens = config_manager.get_summary_max_prompt_tokens()
                 filtered_summaries = []
@@ -173,12 +169,11 @@ class ChatCog(commands.Cog):
                 filtered_summaries.reverse() # 古い順に戻す
                 logger.info(f"Using {len(filtered_summaries)} summaries ({current_summary_tokens:.0f} estimated tokens) for context.")
 
-                # --- システムインストラクション生成関数 (変更なし) ---
+                # --- システムインストラクション生成関数 ---
                 def create_system_prompt(summarized_history: List[Dict[str, Any]], add_recitation_warning=False) -> genai_types.Content:
-                    # (GUI版の省略なしのコードをそのまま使用)
+                    # (省略なしのコードをそのまま使用)
                     persona_prompt_base = config_manager.get_persona_prompt()
                     sys_prompt = persona_prompt_base
-                    # 既知のユーザーリスト
                     sys_prompt += "\n\n--- 既知のユーザーとその固有名 ---"
                     all_identifiers = config_manager.get_all_user_identifiers()
                     if all_identifiers:
@@ -186,7 +181,6 @@ class ChatCog(commands.Cog):
                     else: sys_prompt += "\n(Botが認識している固有名ユーザーなし)"
                     sys_prompt += f"\n- {self.bot.user.display_name} (ID: {self.bot.user.id}) (Bot自身)"
                     sys_prompt += "\n------------------------------------"
-                    # 現在の対話相手情報
                     sys_prompt += f"\n\n--- ★★★ 現在の最重要情報 ★★★ ---"
                     sys_prompt += f"\nあなたは今、以下の Discord ユーザーと **直接** 会話しています。このユーザーに集中してください。"
                     sys_prompt += f"\n- ユーザー名(表示名): {message.author.display_name}"
@@ -199,7 +193,6 @@ class ChatCog(commands.Cog):
                          sys_prompt += f"\n- 会話の場所: サーバーチャンネル「{channel_name}」(ID:{channel_id})"
                     else: sys_prompt += f"\n- 会話の場所: ダイレクトメッセージ (DM)"
                     sys_prompt += "\n---------------------------------"
-                    # あなたの現在の状態
                     current_mood = "普通"
                     if weather_mood_cog:
                         current_mood = weather_mood_cog.get_current_mood()
@@ -210,8 +203,7 @@ class ChatCog(commands.Cog):
                         else:
                             sys_prompt += f"\n\n--- あなたの現在の状態 ---\n気分「{current_mood}」。この気分を応答に自然に反映させてください。"
                     else:
-                         sys_prompt += f"\n\n--- あなたの現在の状態 ---\n気分「{current_mood}」。この気分を応答に自然に反映させてください。" # Cogがない場合
-                    # 過去の会話の要約
+                         sys_prompt += f"\n\n--- あなたの現在の状態 ---\n気分「{current_mood}」。この気分を応答に自然に反映させてください。"
                     if summarized_history:
                         sys_prompt += "\n\n--- 過去の会話の要約 (古い順) ---"
                         user_id_pattern = re.compile(r'(?:User |ID:)(\d+)')
@@ -222,13 +214,12 @@ class ChatCog(commands.Cog):
                             speaker_name = summary.get("speaker_call_name_at_summary", "(不明な発言者)")
                             summary_text = summary.get("summary_text", "(要約内容なし)")
                             def replace_id(match):
-                                try: return self.get_call_name(int(match.group(1))) # IDから最新の呼び名を取得
-                                except: return match.group(0) # 失敗したらそのまま
+                                try: return self.get_call_name(int(match.group(1)))
+                                except: return match.group(0)
                             formatted_summary_text = user_id_pattern.sub(replace_id, summary_text)
                             sys_prompt += f"\n[{ts_str}] {speaker_name}: {formatted_summary_text}"
                         sys_prompt += "\n----------------------"
                     else: sys_prompt += "\n\n(過去の会話の要約はありません)"
-                    # 応答生成指示
                     sys_prompt += f"\n\n--- ★★★ 応答生成時の最重要指示 ★★★ ---"
                     sys_prompt += f"\n1. **現在の対話相手:** あなたが応答すべき相手は「{call_name}」(ID: {user_id})です。他のユーザー宛てのメッセージと混同しないでください。"
                     sys_prompt += f"\n2. **名前の認識:** 会話履歴や要約内の `[ユーザー名]:` や `User <ID>` は発言者を示します。"
@@ -252,109 +243,147 @@ class ChatCog(commands.Cog):
                 model_name = config_manager.get_model_name()
                 generation_config_dict = config_manager.get_generation_config_dict()
                 safety_settings_list = config_manager.get_safety_settings_list()
-                system_instruction_content = create_system_prompt(filtered_summaries) # システムインストラクションを生成
+                system_instruction_content = create_system_prompt(filtered_summaries)
 
-                # GenerateContentConfig を準備 (CUI版と同様)
                 config_args = generation_config_dict.copy()
                 if safety_settings_list:
                     config_args['safety_settings'] = [genai_types.SafetySetting(**s) for s in safety_settings_list]
-                # ★ system_instruction は config 内で指定 ★
                 config_args['system_instruction'] = system_instruction_content
-                # Google Search Tool を使う場合はここで設定 (CUI版と同様)
                 tools_for_api = [genai_types.Tool(google_search=genai_types.GoogleSearch())]
                 config_args['tools'] = tools_for_api
                 final_config = genai_types.GenerateContentConfig(**config_args) if config_args else None
 
-                # contents を準備 (CUI版と同様)
                 contents_for_api = []
                 contents_for_api.extend(history_list)
                 contents_for_api.append(current_content)
 
                 logger.info(f"Sending request to Gemini. Model: {model_name}, History: {len(history_list)}, Summaries: {len(filtered_summaries)}, Current parts: {len(current_parts)}")
+                logger.debug(f"Sending contents: {contents_for_api}") # ★ 送信内容もログ出力
+                logger.debug(f"Generation config: {final_config}") # ★ 設定内容もログ出力
 
-                # ★★★ generate_content 呼び出し (CUI版に合わせる) ★★★
-                response = self.genai_client.models.generate_content(
-                    model=model_name, # ★ `models/` プレフィックスを削除 ★
-                    contents=contents_for_api,
-                    config=final_config # GenerateContentConfig オブジェクトを渡す
-                )
+                # ★★★ generate_content 呼び出し ★★★
+                try:
+                    response = self.genai_client.models.generate_content(
+                        model=model_name,
+                        contents=contents_for_api,
+                        config=final_config
+                    )
+                    # ★ API応答オブジェクト全体をデバッグログに出力 ★
+                    logger.debug(f"Received response object from Gemini: {response}")
+                except Exception as api_call_e:
+                    logger.error("Exception during Gemini API call", exc_info=api_call_e)
+                    await message.reply(f"({call_name}さん、AIとの通信中にエラーが発生しました。)", mention_author=False)
+                    return # ★★★ API呼び出し失敗時はここで処理終了 ★★★
                 # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-
-                logger.debug(f"Received response from Gemini. Finish reason: {response.candidates[0].finish_reason if response.candidates else 'N/A'}")
 
                 # --- 応答処理 (Recitation リトライ含む) ---
                 response_text = ""
                 is_recitation_error = False
                 finish_reason = None
                 response_candidates_parts = []
+                safety_reason = "不明"
+                safety_ratings_info = "詳細不明"
+                block_reason_str = "不明"
 
+                # ★ 応答オブジェクトと候補の存在チェックを強化 ★
                 if response and response.candidates:
                     candidate = response.candidates[0]
                     finish_reason = candidate.finish_reason
+                    logger.debug(f"Response candidate finish reason: {finish_reason}") # ★ finish_reasonをログ出力
+
+                    # ★ 安全性評価のチェック (応答パートがあるかに関わらず) ★
+                    if candidate.safety_ratings:
+                        triggered = [f"{r.category.name}:{r.probability.name}" for r in candidate.safety_ratings if r.probability != genai_types.HarmProbability.NEGLIGIBLE]
+                        if triggered:
+                            safety_reason = f"安全フィルタ({','.join([r.category.name for r in candidate.safety_ratings if r.probability != genai_types.HarmProbability.NEGLIGIBLE])})"
+                            safety_ratings_info = ", ".join(triggered)
+                            logger.warning(f"Safety block detected: {safety_ratings_info}")
+                        else:
+                            logger.debug("Safety ratings present but no category above NEGLIGIBLE.")
+
+                    # ★ コンテンツとパートの存在チェック ★
                     if candidate.content and candidate.content.parts:
                         response_candidates_parts = candidate.content.parts
+                        logger.debug(f"Found {len(response_candidates_parts)} parts in response.")
+                        # 各パートの内容もログに出力（必要なら）
+                        # for i, part in enumerate(response_candidates_parts):
+                        #     logger.debug(f" Part {i}: {part}")
                     else:
-                        logger.warning(f"Response candidate has no content/parts. Finish reason: {finish_reason}")
+                        logger.warning(f"Response candidate has no content or parts. Finish reason: {finish_reason}")
+                        # ここで finish_reason に応じたエラーメッセージを response_text に設定
+                        if finish_reason == genai_types.FinishReason.SAFETY:
+                             response_text = f"({call_name}さん、応答が{safety_reason}によりブロックされました。\n詳細: {safety_ratings_info})"
+                        elif finish_reason == genai_types.FinishReason.RECITATION:
+                             response_text = f"({call_name}さん、引用超過エラーのため応答を停止しました。)"
+                        elif finish_reason == genai_types.FinishReason.MAX_TOKENS:
+                             response_text = f"({call_name}さん、応答が長すぎるため途中で停止しました。)"
+                        # プロンプトフィードバックも確認
+                        elif response.prompt_feedback and response.prompt_feedback.block_reason:
+                             block_reason_str = str(response.prompt_feedback.block_reason)
+                             response_text = f"({call_name}さん、入力が原因で応答がブロックされました。理由: {block_reason_str})"
+                        else:
+                             response_text = f"({call_name}さん、応答内容を取得できませんでした。終了理由: {finish_reason})"
+
                 else:
                     logger.warning("Response object or candidates list is empty.")
+                    # プロンプトフィードバックを確認
+                    if response and hasattr(response, 'prompt_feedback') and response.prompt_feedback and response.prompt_feedback.block_reason:
+                        block_reason_str = str(response.prompt_feedback.block_reason or "不明")
+                        response_text = f"({call_name}さん、入力が原因で応答がブロックされました。理由: {block_reason_str})"
+                    else:
+                        response_text = f"({call_name}さん、AIからの有効な応答を取得できませんでした。)" # フォールバックメッセージ
 
-                # Recitation エラーリトライ (CUI版と同様のロジック)
-                if finish_reason == genai_types.FinishReason.RECITATION:
+                # Recitation エラーリトライ (response_text がまだ空の場合のみ)
+                if finish_reason == genai_types.FinishReason.RECITATION and not response_text:
                     is_recitation_error = True
                     await asyncio.sleep(1)
                     logger.warning(f"Recitation error for user {user_id}. Retrying with warning prompt...")
                     system_instruction_retry = create_system_prompt(filtered_summaries, add_recitation_warning=True)
-                    # 再試行用の config を準備
                     retry_config_args = config_args.copy()
                     retry_config_args['system_instruction'] = system_instruction_retry
                     final_config_retry = genai_types.GenerateContentConfig(**retry_config_args)
 
-                    # ★★★ generate_content 呼び出し (再試行、CUI版に合わせる) ★★★
-                    response = self.genai_client.models.generate_content(
-                        model=model_name, # ★ `models/` プレフィックスを削除 ★
-                        contents=contents_for_api,
-                        config=final_config_retry
-                    )
-                    # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-
-                    logger.debug(f"Retry response finish reason: {response.candidates[0].finish_reason if response.candidates else 'N/A'}")
-                    # 再試行の結果を反映
-                    if response and response.candidates:
-                        candidate = response.candidates[0]
-                        finish_reason = candidate.finish_reason
-                        if candidate.content and candidate.content.parts:
-                            response_candidates_parts = candidate.content.parts
-                        else: response_candidates_parts = []
-                    else: response_candidates_parts = []
-
-                # --- 応答テキスト抽出 & 空の場合の処理 (Safety詳細含む、変更なし) ---
-                raw_response_text = "".join(part.text for part in response_candidates_parts if hasattr(part, 'text') and part.text)
-                response_text = raw_response_text.strip()
-
-                if not response_text:
-                    logger.warning("Response text is empty after extraction.")
-                    block_reason_str="不明"; finish_reason_str="不明"; safety_reason="不明"; safety_ratings_info="詳細不明"
                     try:
-                        if response and hasattr(response, 'prompt_feedback') and response.prompt_feedback:
-                            block_reason_str = str(response.prompt_feedback.block_reason or "なし")
-                        if finish_reason:
-                            finish_reason_str = str(finish_reason)
-                        if finish_reason == genai_types.FinishReason.SAFETY and response.candidates and response.candidates[0].safety_ratings:
-                            ratings = response.candidates[0].safety_ratings
-                            triggered = [f"{r.category.name}:{r.probability.name}" for r in ratings if r.probability != genai_types.HarmProbability.NEGLIGIBLE]
-                            if triggered:
-                                safety_reason = f"安全フィルタ({','.join([r.category.name for r in ratings if r.probability != genai_types.HarmProbability.NEGLIGIBLE])})"
-                                safety_ratings_info = ", ".join(triggered)
-                                logger.warning(f"Safety block detected: {safety_ratings_info}")
-                            else:
-                                safety_reason = "安全フィルタ(詳細不明)"
-                                logger.warning("Safety block detected but no specific category rating found above NEGLIGIBLE.")
-                    except Exception as e_fb:
-                        logger.warning(f"Error accessing response feedback/safety info: {e_fb}")
+                        # ★★★ generate_content 呼び出し (再試行) ★★★
+                        response = self.genai_client.models.generate_content(
+                            model=model_name,
+                            contents=contents_for_api,
+                            config=final_config_retry
+                        )
+                        logger.debug(f"Retry response object: {response}") # ★ 再試行の応答もログに
+                        logger.debug(f"Retry response finish reason: {response.candidates[0].finish_reason if response and response.candidates else 'N/A'}")
+                        # 再試行の結果を反映
+                        if response and response.candidates:
+                            candidate = response.candidates[0]
+                            finish_reason = candidate.finish_reason
+                            if candidate.content and candidate.content.parts:
+                                response_candidates_parts = candidate.content.parts
+                            else: response_candidates_parts = []
+                            # 再試行後の安全性評価も確認
+                            if candidate.safety_ratings:
+                                triggered = [f"{r.category.name}:{r.probability.name}" for r in candidate.safety_ratings if r.probability != genai_types.HarmProbability.NEGLIGIBLE]
+                                if triggered:
+                                    safety_reason = f"安全フィルタ({','.join([r.category.name for r in candidate.safety_ratings if r.probability != genai_types.HarmProbability.NEGLIGIBLE])}) (再試行)"
+                                    safety_ratings_info = ", ".join(triggered) + " (再試行)"
+                                    logger.warning(f"Safety block detected after retry: {safety_ratings_info}")
+                        else: response_candidates_parts = []
+                    except Exception as retry_e:
+                        logger.error("Exception during retry API call", exc_info=retry_e)
+                        response_text = f"({call_name}さん、引用エラー後の再試行中にエラーが発生しました。)"
 
-                    # ユーザーへの応答メッセージ生成
+
+                # --- 応答テキスト抽出 (response_textがまだ空の場合) & 空の場合の処理 ---
+                if not response_text:
+                    raw_response_text = "".join(part.text for part in response_candidates_parts if hasattr(part, 'text') and part.text)
+                    response_text = raw_response_text.strip()
+                    logger.debug(f"Extracted text after potential retry: '{response_text[:200]}...'") # ★ 抽出結果をログに
+
+                # ★★★ 最終的な空応答チェックとフォールバック ★★★
+                if not response_text:
+                    logger.warning(f"Response text is STILL empty after extraction/retry. Finish reason: {finish_reason}, Block Reason: {block_reason_str}")
+                    # is_recitation_error フラグも考慮
                     if is_recitation_error and finish_reason == genai_types.FinishReason.RECITATION:
-                        response_text = f"({call_name}さん、引用超過エラーのため応答を停止しました(再試行)。)"
+                        response_text = f"({call_name}さん、引用超過エラーのため応答を停止しました(再試行後)。)"
                     elif finish_reason == genai_types.FinishReason.RECITATION:
                         response_text = f"({call_name}さん、引用超過エラーのため応答を停止しました。)"
                     elif finish_reason == genai_types.FinishReason.SAFETY:
@@ -363,59 +392,73 @@ class ChatCog(commands.Cog):
                         response_text = f"({call_name}さん、入力内容が原因で応答がブロックされました。理由: {block_reason_str})"
                     elif finish_reason == genai_types.FinishReason.MAX_TOKENS:
                         response_text = f"({call_name}さん、応答が長すぎるため途中で停止しました。)"
-                    else: # その他
-                        response_text = f"({call_name}さん、応答を生成できませんでした。終了理由: {finish_reason_str}, ブロック理由: {block_reason_str})"
-                    logger.warning(f"No valid response generated. Finish: {finish_reason_str}, Block: {block_reason_str}")
+                    else: # その他の不明なケース
+                        response_text = f"({call_name}さん、応答を生成できませんでした。終了理由: {finish_reason}, ブロック理由: {block_reason_str})"
+                    logger.warning(f"Generated fallback message: {response_text}")
 
-                # --- 履歴保存 (GUI版の part_to_dict を使用) ---
+
+                # --- 履歴保存 ---
                 if history_cog and response_text and not response_text.startswith("("):
-                    logger.debug("Saving conversation history.")
-                    # GUI版の part_to_dict (プレフィックス含む) を使う
-                    def part_to_dict(part: genai_types.Part, is_model_response: bool = False) -> Dict[str, Any]:
-                        data = {}
-                        if hasattr(part, 'text') and part.text and part.text.strip():
-                            text_content = part.text.strip()
-                            data['text'] = text_content # 履歴にはプレフィックス含めて保存
-                        elif hasattr(part, 'inline_data') and part.inline_data:
-                            try: data['inline_data'] = {'mime_type': part.inline_data.mime_type, 'data': '<omitted>' }
-                            except Exception: logger.warning("Could not serialize inline_data stub for history.")
-                        elif hasattr(part, 'function_call') and part.function_call:
-                            try: data['function_call'] = {'name': part.function_call.name, 'args': dict(part.function_call.args),}
-                            except Exception: logger.warning("Could not serialize function_call for history.")
-                        elif hasattr(part, 'function_response') and part.function_response:
-                            try: data['function_response'] = {'name': part.function_response.name, 'response': dict(part.function_response.response),}
-                            except Exception: logger.warning("Could not serialize function_response for history.")
-                        return data if data else {}
+                    logger.debug("Attempting to save conversation history.")
+                    try:
+                        def part_to_dict(part: genai_types.Part, is_model_response: bool = False) -> Dict[str, Any]:
+                            data = {}
+                            if hasattr(part, 'text') and part.text and part.text.strip():
+                                text_content = part.text.strip()
+                                data['text'] = text_content
+                            elif hasattr(part, 'inline_data') and part.inline_data:
+                                try: data['inline_data'] = {'mime_type': part.inline_data.mime_type, 'data': '<omitted>' }
+                                except Exception: logger.warning("Could not serialize inline_data stub for history.")
+                            elif hasattr(part, 'function_call') and part.function_call:
+                                try: data['function_call'] = {'name': part.function_call.name, 'args': dict(part.function_call.args),}
+                                except Exception: logger.warning("Could not serialize function_call for history.")
+                            elif hasattr(part, 'function_response') and part.function_response:
+                                try: data['function_response'] = {'name': part.function_response.name, 'response': dict(part.function_response.response),}
+                                except Exception: logger.warning("Could not serialize function_response for history.")
+                            return data if data else {}
 
-                    user_parts_dict = [p_dict for part in current_parts if (p_dict := part_to_dict(part, False))]
-                    if user_parts_dict:
-                        await history_cog.add_history_entry_async(
-                            current_interlocutor_id=self.bot.user.id,
-                            channel_id=channel_id, role="user",
-                            parts_dict=user_parts_dict, entry_author_id=user_id
-                        )
-                    bot_response_parts_dict = [p_dict for part in response_candidates_parts if (p_dict := part_to_dict(part, True))]
-                    if bot_response_parts_dict:
-                        await history_cog.add_history_entry_async(
-                            current_interlocutor_id=user_id, channel_id=channel_id,
-                            role="model", parts_dict=bot_response_parts_dict,
-                            entry_author_id=self.bot.user.id
-                        )
-                        logger.info(f"Added bot response to history.")
-                    else:
-                        logger.warning("No valid bot response parts found to add to history.")
+                        user_parts_dict = [p_dict for part in current_parts if (p_dict := part_to_dict(part, False))]
+                        if user_parts_dict:
+                            await history_cog.add_history_entry_async(
+                                current_interlocutor_id=self.bot.user.id, channel_id=channel_id,
+                                role="user", parts_dict=user_parts_dict, entry_author_id=user_id
+                            )
+                            logger.debug(f"Added user message ({len(user_parts_dict)} parts) to history.")
+                        else:
+                             logger.debug("No user parts to add to history.")
+
+                        # ★ 応答パートの保存は、応答が生成された場合のみ ★
+                        if response_candidates_parts:
+                             bot_response_parts_dict = [p_dict for part in response_candidates_parts if (p_dict := part_to_dict(part, True))]
+                             if bot_response_parts_dict:
+                                 await history_cog.add_history_entry_async(
+                                     current_interlocutor_id=user_id, channel_id=channel_id,
+                                     role="model", parts_dict=bot_response_parts_dict,
+                                     entry_author_id=self.bot.user.id
+                                 )
+                                 logger.info(f"Added bot response ({len(bot_response_parts_dict)} parts) to history.")
+                             else:
+                                 logger.warning("No valid bot response parts found to add to history, though candidates existed.")
+                        else:
+                             logger.debug("No bot response parts candidates found, skipping history save for bot response.")
+
+                    except Exception as hist_e:
+                        logger.error("Error during history saving", exc_info=hist_e)
+                        # 履歴保存エラーは応答送信を妨げないようにする
+
                 elif response_text:
                     logger.debug("Skipping history saving for error/info message.")
+                else:
+                    logger.error("History saving skipped because response_text is still empty/None.") # 通常発生しないはず
 
-                # --- 応答送信 (送信前にプレフィックス除去) ---
+
+                # --- 応答送信 ---
                 if response_text:
                     text_after_citation = helpers.remove_citation_marks(response_text)
-                    # ★ 送信するテキストからはプレフィックスを除去 (helpers は変更なし)
                     text_after_prefixes = helpers.remove_all_prefixes(text_after_citation)
                     max_len = config_manager.get_max_response_length()
                     original_len_after_clean = len(text_after_prefixes)
 
-                    # 最終的な送信テキストの決定
                     final_response_text = None
                     if original_len_after_clean > max_len:
                         final_response_text = text_after_prefixes[:max_len - 3] + "..."
@@ -439,16 +482,24 @@ class ChatCog(commands.Cog):
                             await helpers.split_and_send_messages(message, final_response_text, 1900)
                             logger.info(f"Sent response to user {user_id}.")
                     else: # 送信するテキストがない場合
-                        logger.info(f"Skipped sending empty message to user {user_id}.")
+                        logger.error(f"Failed to generate final_response_text. Original response was: '{response_text[:100]}...'")
+                        # 念のためフォールバックメッセージを送信
+                        try: await message.reply(f"({call_name}さん、応答の準備中に問題が発生しました。)", mention_author=False)
+                        except Exception: pass
 
-            # --- エラーハンドリング (変更なし) ---
+                else: # response_text が None や空のままの場合 (通常ここには来ないはず)
+                    logger.error("!!! CRITICAL: response_text is None or empty before sending !!!")
+                    try: await message.reply(f"({call_name}さん、重大な内部エラーにより応答できませんでした。)", mention_author=False)
+                    except Exception: pass
+
+            # --- エラーハンドリング ---
             except genai_errors.APIError as e: # google.api_core.exceptions も含みうる
                  logger.error(f"Gemini API Error occurred for user {user_id}.", exc_info=True) # 詳細をログに
+                 logger.error(f"Failed API call response object (if available): {response}") # ★ エラー時のレスポンスも記録
                  reply_msg = f"({call_name}さん、AIとの通信中にAPIエラーが発生しました。)"
                  if hasattr(e, 'message') and "API key not valid" in str(e.message):
                      reply_msg = f"({call_name}さん、エラー: APIキーが無効です。)"
                      logger.critical("Invalid Gemini API Key detected!")
-                 # 他のエラーコードに基づいたメッセージ分けを追加可能
                  finish_reason_in_error = getattr(e, 'finish_reason', None) # APIエラーに含まれる場合
                  if finish_reason_in_error:
                      logger.warning(f"Content generation stopped via APIError for user {user_id}. Reason: {finish_reason_in_error}", exc_info=False)
@@ -462,12 +513,15 @@ class ChatCog(commands.Cog):
             except discord.errors.NotFound:
                 logger.warning(f"Message or channel not found (maybe deleted?). Message ID: {message.id}, Channel ID: {message.channel.id if message.channel else 'N/A'}")
             except Exception as e:
+                # ★ 汎用エラーハンドラでも response オブジェクトをログ出力 ★
                 logger.error(f"An unexpected error occurred during message processing for user {user_id}", exc_info=True)
+                logger.error(f"Error occurred with response object (if available): {response}")
                 reply_msg = f"({call_name}さん、メッセージ処理中に予期せぬエラーが発生しました: {type(e).__name__})"
                 try:
                     await message.reply(reply_msg, mention_author=False) if not is_dm else await message.channel.send(reply_msg)
                 except discord.HTTPException:
                     logger.error("Failed to send unexpected error message notification to Discord.")
+            # finally ブロックは不要 (async with typing() が抜ける際に自動で解除されるはず)
 
 # --- setup 関数 (変更なし) ---
 async def setup(bot: commands.Bot):
@@ -477,8 +531,6 @@ async def setup(bot: commands.Bot):
         await bot.add_cog(cog)
         logger.info("ChatCog setup complete and added to bot.")
     else:
-        # 初期化失敗時のエラーメッセージ
         error_msg = "ChatCog setup failed because Gemini client could not be initialized (check API Key?). The Cog will not be loaded."
         logger.error(error_msg)
-        # 必要であれば Bot 起動自体を止める代わりに ExtensionFailed を raise する
         # raise commands.ExtensionFailed(name="cogs.chat_cog", original=RuntimeError(error_msg))

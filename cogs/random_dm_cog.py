@@ -26,7 +26,7 @@ else:
     ChatCog = None
 
 logger = logging.getLogger(__name__)
-# logger.setLevel(logging.DEBUG) # デバッグ用
+logger.setLevel(logging.DEBUG) # デバッグ用
 
 class RandomDMCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
