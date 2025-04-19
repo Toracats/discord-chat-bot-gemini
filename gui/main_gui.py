@@ -51,7 +51,11 @@ except Exception as e_log_init: print(f"CRITICAL ERROR during logging setup: {e_
 async def main(page: ft.Page):
     page.title = f"{config_manager.APP_NAME} Controller"; page.window_width = 800; page.window_height = 600
     page.vertical_alignment = ft.MainAxisAlignment.START; page.horizontal_alignment = ft.CrossAxisAlignment.START
-    page.fonts = {"Noto Sans JP": "fonts/NotoSansJP-Regular.ttf"}; page.theme = ft.Theme(font_family="Noto Sans JP"); page.dark_theme = ft.Theme(font_family="Noto Sans JP")
+    page.fonts = {
+    "Noto Sans JP": "fonts/NotoSansJP-Regular.ttf",
+    "Bebas Neue": "fonts/BebasNeue-Regular.ttf"
+}
+    page.theme = ft.Theme(font_family="Noto Sans JP"); page.dark_theme = ft.Theme(font_family="Noto Sans JP")
 
     is_in_critical_error_state = threading.Event(); is_in_critical_error_state.clear()
 
